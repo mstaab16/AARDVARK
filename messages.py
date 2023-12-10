@@ -25,20 +25,20 @@ class MotorPositionMessageFake(BaseModel):
 
 # Message classes for communications between
 # the Real Maestro LV Client and the Translator
-class MaestroLVStartupMessage(BaseModel):
-    pass
+# class MaestroLVStartupMessage(BaseModel):
+#     pass
 
-class MaestroLVPositionRequest(BaseModel):
-    pass
+# class MaestroLVPositionRequest(BaseModel):
+#     pass
 
-class MaestroLVPositionResponse(BaseModel):
-    pass
+# class MaestroLVPositionResponse(BaseModel):
+#     pass
 
-class MaestroLVDataMessage(BaseModel):
-    pass
+# class MaestroLVDataMessage(BaseModel):
+#     pass
 
-class MaestroLVShutdownMessage(BaseModel):
-    pass
+# class MaestroLVShutdownMessage(BaseModel):
+#     pass
 
 # Message classes for communications between
 # the RunEnegineManager and the Translator
@@ -69,6 +69,7 @@ class REManagerStartupMessage(BaseModel):
 
 class REManagerMotorPositionMessage(BaseModel):
     positions: list[float]
+    names: list[str]
 
 
 # Message classes for communications between

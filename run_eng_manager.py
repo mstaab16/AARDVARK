@@ -11,7 +11,7 @@ from bluesky_adaptive.per_start import adaptive_plan
 import numpy as np
 from sim_ARPES import simulate_ARPES_measurement
 from ophyd.sim import SynAxis
-from ophyd import Device, Component, DeviceStatus, Signal, DynamicDeviceComponent
+from ophyd import Device, Component, Signal
 from ophyd.device import create_device_from_components
 
 from messages import *
@@ -117,7 +117,8 @@ class RunEngineManager:
     def update_motor_coordinates(self, *args, **kwargs):
         pos_req_msg = self.socket.recv()
         positions = [motor.get().readback for motor in self.motors]
-        new_pos_msg = REManagerMotorPositionMessage(positions=positions)
+        names = [motor.name for motor in self.motors]
+        new_pos_msg = REManagerMotorPositionMessage(positions=positions, names=names)
         self.socket.send_string(new_pos_msg.model_dump_json())
 
     def update_datasets(self, *args, **kwargs):
