@@ -1,0 +1,14 @@
+bluesky
+ophyd
+databroker
+bluesky-adaptive
+zmq
+matplotlib
+numpy
+scikit-learn
+scikit-image
+scipy
+pyqt5
+ipython
+pydantic
+dash

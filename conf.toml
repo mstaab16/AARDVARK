@@ -1,0 +1,12 @@
+[status]
+stop = false
+
+[axes]
+x = {bounds = [-1.0, 1.0], init = []}
+y = {bounds = [-0.85, 0.4], init = []}
+z = {bounds = [-0.1, 0.1], init = []}
+
+[pipeline]
+PCA = {n_components = 10}
+KMeans = {n = 5, n_init = 100}
+GPytorch = {intensity = 0.3, cluster_uncertianty = 0.7}
