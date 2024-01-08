@@ -10,8 +10,8 @@ from pydantic import BaseModel, Field
 class AIModeparm(BaseModel):
     device_name: str = Field(..., alias='device::name')
     enabled_: bool = Field(..., alias='enabled?')
-    high: int
-    low: int
+    high: float
+    low: float
     min_step: float = Field(..., alias='min. step')
 
     class Config:
@@ -28,8 +28,8 @@ class RangeItem(BaseModel):
 
 
 class Subdevice(BaseModel):
-    hi: int
-    lo: int
+    hi: float
+    lo: float
     name: str
     parms: List
     units: str
@@ -112,7 +112,7 @@ class FitsDescriptor(BaseModel):
         populate_by_name = True
     
 class DataMessage(BaseModel):
-    current_data_cycle: int = Field(..., alias='current  data cycle')
+    current_data_cycle: int = Field(..., alias='current data cycle')
     current_AI_cycle: int = Field(..., alias='current AI cycle')
     method: str = 'sending newdata'
 
@@ -129,13 +129,35 @@ class MaestroLVDataMessage(BaseModel):
 ########################################################################################
 #                                     FOR CLOSE MESSAGE
 ########################################################################################
-class MaestroLVShutdownMessage(BaseModel):
-    current_data_cycle: int = Field(..., alias='current  data cycle')
+class MaestroLVCloseMessage(BaseModel):
+    current_data_cycle: int = Field(default=0, alias='current data cycle')
     method: str = "closing"
 
     class Config:
         populate_by_name = True
 
+class MaestroLVAbortMessage(BaseModel):
+    current_data_cycle: int = Field(default=0, alias='current data cycle')
+    method: str = "abort"
+
+    class Config:
+        populate_by_name = True
+
+
+########################################################################################
+#                                ANY RESPONSE MESSAGE
+########################################################################################
+class MaestroLVResponse(BaseModel):
+    status: str
+
+    class Config:
+        populate_by_name = True
+    
+class MaestroLVResponseOK(MaestroLVResponse):
+    status:str = 'OK'
+
+class MaestroLVResponseError(MaestroLVResponse):
+    status:str = 'stop'
 
 ########################################################################################
 #                                FOR POSITION RESPONSE MESSAGE
@@ -147,12 +169,19 @@ class MotorPosition(BaseModel):
     class Config:
         populate_by_name = True
 
-from pydantic import RootModel
+# from pydantic import RootModel
 
-MaestroLVPositionResponse = RootModel[List[MotorPosition]]
+class MaestroLVPositionResponse(MaestroLVResponse):
+    positions: List[MotorPosition]
+
+    class Config:
+        populate_by_name = True
+
+# MaestroLVPositionResponse = RootModel[List[MotorPosition]]
 # class MaestroLVPositionResponse(BaseModel):
 #     __root__: List[MotorPosition]
 
 #     class Config:
 #         populate_by_name = True
+
 

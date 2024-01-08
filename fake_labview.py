@@ -6,16 +6,24 @@ from maestro_messages import *
 import time
 
 class FakeLV:
-    def __init__(self, translator_addr = 'tcp://127.0.0.1:5551'):
+    def __init__(self, translator_addr = 'tcp://einstein.dhcp.lbl.gov:5550'):
         self.translator_addr = translator_addr
         self.context = zmq.Context()
         self.socket = self.context.socket(zmq.REQ)
         self.socket.connect(translator_addr)
         self.current_ai_cycle = 0
         self.current_data_cycle = 0
-        self.max_ai_cycle = 100
+        self.max_ai_cycle = 25
         self.startup()
         self.operation_loop()
+
+    def get_translator_response(self):
+        msg: MaestroLVResponse = self.socket.recv_json()
+        if msg.get("status") == MaestroLVResponseError().status:
+            print("Recieved an Error from the Translator...\nShutting down...")
+            exit()
+        return msg
+
 
     def startup(self):
         # msg = FakeLVStartupMessage(
@@ -58,7 +66,8 @@ class FakeLV:
         print("LV: Sending startup message to translator...")
         self.socket.send_string(msg.model_dump_json())
         print("LV: Sent.")
-        resp = self.socket.recv()
+        # resp = self.socket.recv()
+        resp = self.get_translator_response()
         print(f"LV: Recieved response: {resp}")
 
     def operation_loop(self):
@@ -72,21 +81,26 @@ class FakeLV:
             self.send_data()
             self.current_ai_cycle += 1
             if self.current_ai_cycle >= self.max_ai_cycle:
+                self.send_translator_close()
                 break
+
+    def send_translator_close(self):
+        self.socket.send_string(MaestroLVCloseMessage().model_dump_json())
 
     def send_pos_req(self):
         self.socket.send_string(MaestroLVPositionRequest(current_AI_cycle=self.current_ai_cycle).model_dump_json())
     
     def recieve_next_position(self):
-        msg = self.socket.recv_json()
+        # msg = self.socket.recv_json()
+        msg = self.get_translator_response()
         print(msg)
-        position = MaestroLVPositionResponse(msg)
+        position = MaestroLVPositionResponse(**msg)
         self.position = position
         print(f'LV: Now at position: {self.position}')
 
     def send_data(self):
         data = self.generate_data()
-        data_bytes = data.tobytes()
+        data_bytes = data.tobytes(order='F')
         data_message=DataMessage(
                     current_data_cycle=self.current_data_cycle,
                     current_AI_cycle=self.current_ai_cycle,
@@ -146,14 +160,18 @@ class FakeLV:
                 ).model_dump_json()
                 )
         self.current_data_cycle += 1
-        msg = self.socket.recv()
+        msg = self.get_translator_response()
         print(f'LV: Recieved msg after sending data: {msg}')
     
     def generate_data(self):
         print(self.position)
-        r = np.array([motor.value for motor in self.position.root])
-        r = np.sum(r**2) + 0.001
-        return np.random.uniform(0,1,(1024,1024)).astype(np.float64) / r
+        fac = 1
+        if self.position.positions[0].value < 0:
+            fac = 0.1
+        if self.position.positions[0].value > 0.2:
+            fac = 2
+            
+        return (fac*np.random.uniform(0,1e7, (512, 512))).astype(np.int32)
 
 
 f = FakeLV()

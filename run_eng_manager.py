@@ -19,6 +19,7 @@ from translator_server import Translator
 from motors import LVSignal
 from agents import MangerAgent
 
+using_fakelabview = False
 
 class SynMotor(SynAxis):
     def __init__(self, *args, bounds, delta, **kwargs):
@@ -66,64 +67,54 @@ class SynDetector(Device):
 
 class RunEngineManager:
     def __init__(self):
-        self.RE = RunEngine()
         self.context = zmq.Context()
         self.socket = self.context.socket(zmq.REP)
-        self.socket.bind('tcp://127.0.0.1:5550')
+        self.socket.bind('tcp://*:5551')
+        self.id = int(np.load('id_counter.npy'))
+        print(f"RE: ID {self.id} HAS STARTED!")
+        # self.id = id
+        self.start()
+    
+    def start(self):
+        self.RE = RunEngine()
+        self.abort=False
         print('RE: Listening for position request...')
         start_msg = REManagerStartupMessage(**self.socket.recv_json())
         self.max_count = start_msg.max_count
-            # defn = {
-            #     'theta': (LVSignal, 'theta', {'value': 0.1, 'bounds': (-15.0, 15.0)}),
-            #     'phi': (LVSignal, 'phi', {'value': -3, 'bounds': (-15.0, 15.0)}),
-            #     'img': (LVSignal, 'img', {'value': np.zeros((64,64)), 'write_access': False}),
-            # }
-        # motor_defn = {
-        #     motor.name: (LVSignal, motor.name, {'value': np.mean(motor.bounds), 'bounds': motor.bounds, 'delta': motor.delta})
-        #     for motor in start_msg.motor_defs
-        # }
-
-        # data_defn = {
-        #     data.name: (LVSignal, data.name, {'value': np.zeros(data.shape).astype(np.float64)})
-        #     for data in start_msg.data_defs 
-        # }
-
-        # print(motor_defn)
-        # print(data_defn)
-
+        self.count = 0
         self.motors = [SynMotor(name=motor.name, value=np.mean(motor.bounds), bounds=motor.bounds, delta=motor.delta) for motor in start_msg.motor_defs]
         self.detectors = [SynDetector(name=data.name, data_shape=data.shape) for data in start_msg.data_defs]
-
-        # print(motors)
-        # print(detectors)
         self.socket.send(b'Startup OK.')
-
         self.RE.subscribe(self.update_datasets, name='stop')
+        # self.RE.subscribe(lambda name, doc: print(doc), name='stop')
+        # self.RE.subscribe(lambda name, doc: print("WTF????"), name='stop')
         self.RE.subscribe(self.update_motor_coordinates, name='start')
+        self.start_RE()
 
-        print(self.start_RE())
-        
-        # while True:
-        #     print('RE: Listening for position request...')
-        #     print(self.socket.recv_json())
-        #     pos = REManagerMotorPositionMessage(positions=np.random.uniform(0,1,2).tolist())
-        #     print(f'RE: Sending position: {pos}')
-        #     self.socket.send_string(pos.model_dump_json())
-        #     print(f'RE: Waiting for data...')
-        #     self.socket.recv_json()
-        #     print(f'RE: Sending OK.')
-        #     self.socket.send(b'OK')
+    def recv_message(self):
+        msg = self.socket.recv_json()
+        print("RE: Recieved message")
+        # if self.count > 4:
+        #     self.abort = True
+        # print(msg)
+        if msg.get('message') == RERestartMessage().message:
+            print("RE: Restarting...")
+            self.socket.send(b'OK')
+            self.start()
+        return msg
 
     def update_motor_coordinates(self, *args, **kwargs):
-        pos_req_msg = self.socket.recv()
+        pos_req_msg = self.recv_message()
         positions = [motor.get().readback for motor in self.motors]
         names = [motor.name for motor in self.motors]
         new_pos_msg = REManagerMotorPositionMessage(positions=positions, names=names)
         self.socket.send_string(new_pos_msg.model_dump_json())
 
     def update_datasets(self, *args, **kwargs):
-        data_incoming_req = self.socket.recv_json()
+        data_incoming_req = self.recv_message()
         data_message = REManagerDataMessage(**data_incoming_req)
+        # print("***Debugging Data Message")
+        # print(data_message)
         if len(data_message.names) != len(self.detectors):
             raise ValueError("Different number of data names and detectors?")
         for name, data_bytes, data_shape, detector in zip(data_message.names, data_message.datasets, data_message.shapes, self.detectors):
@@ -131,12 +122,31 @@ class RunEngineManager:
             print(detector.data.name)
             if name != detector.name:
                 raise ValueError("Somehow the data order is different than when defined. Change to a dict.")
-            np_arr = np.frombuffer(base64.decodebytes(data_bytes), dtype=np.float64).reshape(data_shape)
+            # print(len(base64.decodebytes(data_bytes)))
+            # print(base64.decodebytes(data_bytes))
+            print(f'{len(data_bytes)=}')
+            # print(f'{data_bytes=}')
+            # if using_fakelabview:
+            #     data_bytes = base64.decodebytes(data_bytes)
+            np_arr = np.frombuffer(data_bytes[:4*np.multiply(*data_shape)], dtype=np.int32)
+            # print("***FLAT ARRAY FROM BUFFER")
+            # print(np_arr)
+            # print(np_arr)
+            np_arr = np_arr.reshape(data_shape, order='F')
+            print("***RESHAPED ARRAY")
+            print(np_arr.shape)
+            # print(np_arr)
             detector.data.put(np_arr)
+            print(detector)
+        self.count += 1
+        print(self.count, self.max_count)
+        if self.count == self.max_count - 1:
+            self.abort = True
         # new_pos_msg = REManagerMotorPositionMessage(positions=positions)
         self.socket.send_string('RE: Updated data Ok.') 
 
     def start_RE(self):
+        print(self.detectors)
         unique_ids = self.RE(
             self.with_agent(
                 MangerAgent(
@@ -145,11 +155,12 @@ class RunEngineManager:
                         input_min_spacings=[motor.delta for motor in self.motors],
                         n_independent_keys=len(self.motors),
                         dependent_shape=self.detectors[0].data_shape,
+                        re_manager=self,
                         # search_motors=search_motors,
                         # motor_bounds=motor_bounds,
                 ),
                 search_motors=self.motors,
-                initial_positions=[motor.get().readback for motor in self.motors], 
+                initial_positions=[motor.bounds[0] for motor in self.motors], 
                 detectors=self.detectors,
                 # dependent_keys=[detector.name for detector in detectors]
             ),
@@ -175,6 +186,7 @@ class RunEngineManager:
             to_recommender=cb,
             from_recommender=queue,
         )
+
 
     def with_agent(self, agent, detectors, search_motors, initial_positions):
         return (

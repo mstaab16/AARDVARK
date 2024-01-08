@@ -13,7 +13,6 @@ class LVSignal(Signal):
         ...
 
     def put(self, value, **kwargs):
-        value = np.clip(value, *self.bounds)
         print(f"Tell LabView to put {self.name}: {value}")
         super().put(value, **kwargs)
         ...

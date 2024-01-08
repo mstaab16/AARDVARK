@@ -1,7 +1,14 @@
 import numpy as np
 import matplotlib.pyplot as plt
 from skimage.transform import resize
+from scipy.interpolate import griddata
 import torch
+import gpytorch
+from gpytorch.models import ExactGP
+from gpytorch.likelihoods import DirichletClassificationLikelihood
+from gpytorch.means import ConstantMean
+from gpytorch.kernels import ScaleKernel, RBFKernel
+from scipy.ndimage import gaussian_filter
 
 from bluesky_adaptive.recommendations import NoRecommendation
 
@@ -9,6 +16,8 @@ from typing import Callable, Dict, Iterable, List, Literal, Optional, Sequence, 
 from numpy.typing import ArrayLike
 
 from abc import ABC, abstractmethod
+
+import time
 
 # This is an adaptation of the Agent base class from bluesky-adaptive that works for my use
 
@@ -195,238 +204,191 @@ class KMeansAgent(Agent):
         print("Creating KMeansAgent")
         self.args = args
         self.kwargs = kwargs
+        self.n_clusters = kwargs['n_clusters']
+        self.id = kwargs.get('id')
+        self.save_path = f'save/KMeansAgent/label_history/{self.id:010}.txt'
 
     def tell(self, x, y):
         print(f"KMeansAgent told about new data: {x.shape=}, {y.shape=}")
-        if len(y) < self.kwargs.get('n_clusters'):
-            return x, np.zeros(len(y))
-        
-        self.KMeans = KMeans(*self.args, **self.kwargs)
-        self.KMeans.fit(y)
-        return x, self.KMeans.labels_
+        if len(y) < self.n_clusters:
+            self.labels = np.zeros(len(y))
+            new_y = np.zeros(len(y))
+        else:
+            self.KMeans = KMeans(n_clusters=self.n_clusters)
+            self.KMeans.fit(y)
+            self.labels = self.KMeans.labels_
+
+            new_y = np.zeros((len(self.KMeans.labels_), self.kwargs.get('n_clusters')))
+            for i, label in enumerate(self.KMeans.labels_):
+                new_y[i,label] = 1
+        return x, new_y
+    
+    def save_info(self):
+        with open(self.save_path, 'a') as f:
+                np.savetxt(f, self.labels)
 
     def ask(self, batch_size):
         raise NotImplementedError
     
     def tell_many(self, x, y):
         raise NotImplementedError
+
+
+class MultitaskGPModel(gpytorch.models.ExactGP):
+    def __init__(self, train_x, train_y, likelihood):
+        super(MultitaskGPModel, self).__init__(train_x, train_y, likelihood)
+        self.mean_module = gpytorch.means.MultitaskMean(
+            gpytorch.means.ConstantMean(), num_tasks=train_y.shape[1]
+        )
+        self.covar_module = gpytorch.kernels.MultitaskKernel(
+            gpytorch.kernels.RBFKernel(), num_tasks=train_y.shape[1], rank=1
+        )
+
+    def forward(self, x):
+        mean_x = self.mean_module(x)
+        covar_x = self.covar_module(x)
+        return gpytorch.distributions.MultitaskMultivariateNormal(mean_x, covar_x)
 
 
 class GPytorchAgent(Agent):
     """A simple naive agent that cycles samples sequentially in environment space"""
 
-    def __init__(self):#, input_bounds, input_min_spacings, decision_space_shape):
-        return
+    def __init__(self, input_bounds, input_min_spacings, id):
         print("Creating GPytorchAgent")
-        self.input_bouds = input_bounds
+        self.id = id
+        self.input_bounds = input_bounds
         self.input_min_spacings = input_min_spacings
-        self.decicion_space_shape = decision_space_shape
         self.inputs=None
         self.targets=None
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    
+        p = [np.arange(low, high, delta) for (low, high), delta in zip(self.input_bounds, self.input_min_spacings)]
+        self.meshgrid_points = np.meshgrid(*p)
+        self.all_possible_positions = torch.stack([torch.tensor(arr.flatten(),dtype=torch.float32).to(self.device) for arr in self.meshgrid_points],dim=1)
+        print(f"Total number of possible position is ~{self.all_possible_positions.shape}")
+
     def tell(self, x, y):
         print(f"GPytorchAgent told about new data: {x.shape=}, {y.shape=}")
         # return np.ones(self.decicion_space_shape), None
         if self.inputs is None:
-            self.inputs = torch.atleast_2d(torch.tensor(x, device=self.device))
-            self.targets = torch.atleast_1d(torch.tensor(y, device=self.device))
+            self.inputs = torch.atleast_2d(torch.tensor(x, device=self.device, dtype=torch.float32))
+            self.targets = torch.atleast_1d(torch.tensor(y, device=self.device, dtype=torch.float32))
         else:
-            self.inputs = torch.cat([self.inputs, torch.atleast_2d(torch.tensor(x, device=self.device))], dim=0)
-            self.targets = torch.cat([self.targets, torch.atleast_1d(torch.tensor(y, device=self.device))], dim=0)
+            self.inputs = torch.cat([self.inputs, torch.atleast_2d(torch.tensor(x, device=self.device, dtype=torch.float32))], dim=0)
+            self.targets = torch.cat([self.targets, torch.atleast_1d(torch.tensor(y, device=self.device, dtype=torch.float32))], dim=0)
             self.inputs.to(self.device)
             self.targets.to(self.device)
-        self.surrogate_model.set_train_data(self.inputs, self.targets, strict=False)
+        self.fit()
+        return x, y
+        # self.surrogate_model.set_train_data(self.inputs, self.targets, strict=False)
         # return dict(independent_variable=x, observable=y, cache_len=len(self.targets))
 
+    def fit(self):# model, likelihood, train_x, train_y):
+        print("Fitting GP")
+        # indices = np.arange(train_x.shape[0])
+        # max(int(np.ceil(train_x.shape[0]*0.2)), min(train_x.shape[0], 100))
+        # print(min(train_x.shape[0], min(100,int(np.ceil(train_x.shape[0]*0.2)))))
+        # indices = np.random.choice(indices, size=min(train_x.shape[0], 1000), replace=False)
+        # train_x = train_x[indices]
+        # train_y = train_y[indices]
+        train_x = self.inputs
+        train_y = self.targets
+        # if torch.cuda.is_available():
+        #     train_x = train_x.cuda()
+        #     train_y = train_y.cuda()
+
+        likelihood = gpytorch.likelihoods.MultitaskGaussianLikelihood(num_tasks=train_y.shape[1])
+        model = MultitaskGPModel(train_x, train_y, likelihood)
+        
+        # if torch.cuda.is_available():
+        #     model = model.cuda()
+        #     likelihood = likelihood.cuda()
+        model.to(self.device)
+        likelihood.to(self.device)
+
+        # Find optimal model hyperparameters
+        model.train()
+        likelihood.train()
+
+        # Use the adam optimizer
+        optimizer = torch.optim.Adam(model.parameters(), lr=0.1)  # Includes GaussianLikelihood parameters
+
+        # "Loss" for GPs - the marginal log likelihood
+        mll = gpytorch.mlls.ExactMarginalLogLikelihood(likelihood, model)
+        
+        training_iterations = 50
+        print("Training GP")
+        for i in range(training_iterations):
+            optimizer.zero_grad()
+            output = model(train_x)
+            loss = -mll(output, train_y)
+            loss.backward()
+            print('Iter %d/%d - Loss: %.3f' % (i + 1, training_iterations, loss.item()))
+            optimizer.step()
+
+        model.eval()
+        likelihood.eval()
+
+        with torch.no_grad(), gpytorch.settings.fast_pred_var(), gpytorch.settings.max_root_decomposition_size(100):
+            self.model = model
+            self.likelihood = likelihood
+
     def ask(self, batch_size):
-        raise NotImplementedError
+        print("Asking GP")
+        # return 1,1
+        random_positions = np.random.choice(len(self.all_possible_positions),size=1000,replace=False)
+        test_x = self.all_possible_positions[random_positions]
+        evaluation = self.model(test_x)
+        test_x = test_x.detach().cpu().numpy()
+        stds = self.likelihood(evaluation).stddev[:,:].detach().cpu().numpy().sum(axis=1)
+        # means = evaluation.mean.detach().cpu().numpy()
+        most_uncertain_i = np.argmax(stds.flatten())
+        next_pos = list(self.all_possible_positions[most_uncertain_i].detach().cpu().numpy())
+        # interp_stds = griddata(test_x, stds, (self.meshgrid_points[0], self.meshgrid_points[1]), method='nearest')
+        # print(f'{means.shape=}')
+        # interp_0 = griddata(test_x, means[:,0], (self.meshgrid_points[0], self.meshgrid_points[1]), method='nearest')
+        # interp_1 = griddata(test_x, means[:,1], (self.meshgrid_points[0], self.meshgrid_points[1]), method='nearest')
+        # interp_2 = griddata(test_x, means[:,2], (self.meshgrid_points[0], self.meshgrid_points[1]), method='nearest')
+        # np.save(f'save/stds/run_{len(self.inputs)}.npy', interp_stds)
+        # np.save(f'save/c0/run_{len(self.inputs)}.npy', interp_0)
+        # np.save(f'save/c1/run_{len(self.inputs)}.npy', interp_1)
+        # np.save(f'save/c2/run_{len(self.inputs)}.npy', interp_2)
+        # np.save(f'save/stds/run_{len(self.inputs)}.npy', np.array([random_positions, stds]).T)
+        # return 1,1
+        return next_pos
+
+        # raise NotImplementedError
     
     def tell_many(self, x, y):
         raise NotImplementedError
+
+    def save_info(self):
+        pass
     
-
-# import importlib
-# from abc import ABC
-# from logging import getLogger
-# from typing import Callable, Optional, Tuple
-
-# import torch
-# from botorch import fit_gpytorch_mll
-# from botorch.acquisition import AcquisitionFunction, UpperConfidenceBound
-# from botorch.models import SingleTaskGP
-# from botorch.optim import optimize_acqf
-# from gpytorch.mlls import ExactMarginalLogLikelihood
-
-# class SingleTaskGPAgent():
-#     def __init__(
-#         self,
-#         *,
-#         bounds: torch.Tensor,
-#         gp: SingleTaskGP = None,
-#         device: torch.device = None,
-#         out_dim=1,
-#         partial_acq_function: Optional[Callable] = None,
-#         num_restarts: int = 10,
-#         raw_samples: int = 20,
-#         **kwargs,
-#     ):
-#         """Single Task GP based Bayesian Optimization
-
-#         Parameters
-#         ----------
-#         bounds : torch.Tensor
-#             A `2 x d` tensor of lower and upper bounds for each column of `X`
-#         gp : SingleTaskGP, optional
-#             GP surrogate model to use, by default uses BoTorch default
-#         device : torch.device, optional
-#             Device, by default cuda if avail
-#         out_dim : int, optional
-#             Dimension of output predictions by surrogate model, by default 1
-#         partial_acq_function : Optional[Callable], optional
-#             Partial acquisition function that will take a single argument of a conditioned surrogate model.
-#             By default UCB with beta at 0.1
-#         num_restarts : int, optional
-#             Number of restarts for optimizing the acquisition function, by default 10
-#         raw_samples : int, optional
-#             Number of samples used to instantiate the initial conditions of the acquisition function optimizer.
-#             For a discussion of num_restarts vs raw_samples, see:
-#             https://github.com/pytorch/botorch/issues/366
-#             Defaults to 20.
-#         """
-#         super().__init__(**kwargs)
-#         self.inputs = None
-#         self.targets = None
-
-#         self.device = (
-#             torch.device("cuda" if torch.cuda.is_available() else "cpu")
-#             if device is None
-#             else torch.device(device)
-#         )
-#         self.bounds = torch.tensor(bounds, device=self.device).view(2, -1)
-#         if gp is None:
-#             dummy_x, dummy_y = torch.randn(2, self.bounds.shape[-1], device=self.device), torch.randn(
-#                 2, out_dim, device=self.device
-#             )
-#             gp = SingleTaskGP(dummy_x, dummy_y)
-
-#         self.surrogate_model = gp
-#         self.mll = ExactMarginalLogLikelihood(self.surrogate_model.likelihood, self.surrogate_model)
-
-#         self.surrogate_model.to(self.device)
-#         self.mll.to(self.device)
-
-#         if partial_acq_function is None:
-#             self._partial_acqf = lambda gp: UpperConfidenceBound(gp, beta=0.1)
-#             self.acqf_name = "UpperConfidenceBound"
-#         else:
-#             self._partial_acqf = partial_acq_function
-#             self.acqf_name = "custom"
-#         self.num_restarts = num_restarts
-#         self.raw_samples = raw_samples
-
-#     # def server_registrations(self) -> None:
-#     #     super().server_registrations()
-#     #     self._register_method("update_acquisition_function")
-
-#     # def update_acquisition_function(self, acqf_name, **kwargs):
-#     #     module = importlib.import_module("botorch.acquisition")
-#     #     self.acqf_name = acqf_name
-#     #     self._partial_acqf = lambda gp: getattr(module, acqf_name)(gp, **kwargs)
-#     #     self.close_and_restart()
-
-#     def start(self, *args, **kwargs):
-#         _md = dict(acqf_name=self.acqf_name)
-#         self.metadata.update(_md)
-#         super().start(*args, **kwargs)
-
-#     def tell(self, x, y):
-#         if self.inputs is None:
-#             self.inputs = torch.atleast_2d(torch.tensor(x, device=self.device))
-#             self.targets = torch.atleast_1d(torch.tensor(y, device=self.device))
-#         else:
-#             self.inputs = torch.cat([self.inputs, torch.atleast_2d(torch.tensor(x, device=self.device))], dim=0)
-#             self.targets = torch.cat([self.targets, torch.atleast_1d(torch.tensor(y, device=self.device))], dim=0)
-#             self.inputs.to(self.device)
-#             self.targets.to(self.device)
-#         self.surrogate_model.set_train_data(self.inputs, self.targets, strict=False)
-#         # return dict(independent_variable=x, observable=y, cache_len=len(self.targets))
-#         return x, y
-
-#     # def report(self):
-#     #     """Fit GP, and construct acquisition function.
-#     #     Document retains state dictionary.
-#     #     """
-#     #     fit_gpytorch_mll(self.mll)
-#     #     acqf = self._partial_acqf(self.surrogate_model)
-#     #     return dict(
-#     #         latest_data=self.tell_cache[-1],
-#     #         cache_len=self.inputs.shape[0],
-#     #         **{
-#     #             "STATEDICT-" + ":".join(key.split(".")): val.detach().cpu().numpy()
-#     #             for key, val in acqf.state_dict().items()
-#     #         },
-#     #     )
-
-#     def ask(self, batch_size=1):
-#         """Fit GP, optimize acquisition function, and return next points.
-#         Document retains candidate, acquisition values, and state dictionary.
-#         """
-#         if batch_size > 1:
-#             # logger.warning(f"Batch size greater than 1 is not implemented. Reducing {batch_size} to 1.")
-#             batch_size = 1
-#         fit_gpytorch_mll(self.mll)
-#         acqf = self._partial_acqf(self.surrogate_model)
-#         acqf.to(self.device)
-#         candidate, acq_value = optimize_acqf(
-#             acq_function=acqf,
-#             bounds=self.bounds,
-#             q=batch_size,
-#             num_restarts=self.num_restarts,
-#             raw_samples=self.raw_samples,
-#         )
-#         return (
-#             [
-#                 dict(
-#                     candidate=candidate.detach().cpu().numpy(),
-#                     acquisition_value=acq_value.detach().cpu().numpy(),
-#                     # latest_data=self.tell_cache[-1],
-#                     # cache_len=self.inputs.shape[0],
-#                     **{
-#                         "STATEDICT-" + ":".join(key.split(".")): val.detach().cpu().numpy()
-#                         for key, val in acqf.state_dict().items()
-#                     },
-#                 )
-#             ],
-#             torch.atleast_1d(candidate).detach().cpu().numpy(),
-#         )
-
-#     # def remodel_from_report(self, run: BlueskyRun, idx: int = None) -> Tuple[AcquisitionFunction, SingleTaskGP]:
-#     #     idx = -1 if idx is None else idx
-#     #     keys = [key for key in run.report["data"].keys() if key.split("-")[0] == "STATEDICT"]
-#     #     state_dict = {".".join(key[10:].split(":")): torch.tensor(run.report["data"][key][idx]) for key in keys}
-#     #     acqf = self._partial_acqf(self.surrogate_model)
-#     #     acqf.load_state_dict(state_dict)
-#     #     acqf.to(self.device)
-#     #     return acqf, acqf.model
-
-
+    
 class MangerAgent(Agent):
-    def __init__(self, max_count, input_bounds, input_min_spacings, n_independent_keys, dependent_shape):
+    def __init__(self, max_count, input_bounds, input_min_spacings, n_independent_keys, dependent_shape, re_manager):
         """Load the model, set up the necessary bits"""
-
+        self.id = re_manager.id
+        self.save_positions_path = f'save/ManagerAgent/pos/{self.id:010}.txt'
+        self.save_flat_targets_path = f'save/ManagerAgent/flat_target/{self.id:010}.txt'
+        self.dependent_shape = dependent_shape
+        # self.dependent_shape = (300,300)
+        self.re_manager = re_manager
         self.max_count = max_count
         self.count = 0
-        self.min_count_to_make_decision = 1000
+        self.min_count_to_make_decision = 10
         self.input_bounds = np.array(input_bounds)
         self.input_min_spacings = input_min_spacings
+        # self.initial_points = []
         # The shape below is found by computing (upper-lower)/spacing
         # for each bound at the same time and rounding up as an int
-        self.decision_space = np.ones(np.ceil(np.diff(input_bounds, axis=1).flatten()/input_min_spacings).astype(int))
+        # self.decision_space = np.ones(np.ceil(np.diff(input_bounds, axis=1).flatten()/input_min_spacings).astype(int))
         self.inputs = np.nan * np.zeros((max_count, n_independent_keys))
-        self.targets = np.nan * np.zeros((max_count, *dependent_shape))
+        self.targets = np.nan * np.zeros((max_count, *self.dependent_shape))
+        self.flat_targets = np.nan * np.zeros((max_count, np.multiply(*self.dependent_shape)))
 
-        self.pipeline = [PCAAgent(n_components=10), KMeansAgent(n_clusters=3), GPytorchAgent()]
+        # self.pipeline = [PCAAgent(n_components=5), KMeansAgent(n_clusters=4), GPytorchAgent(input_bounds=self.input_bounds, input_min_spacings=self.input_min_spacings)]
+        self.pipeline = [KMeansAgent(n_clusters=4, id=self.id), GPytorchAgent(input_bounds=self.input_bounds, input_min_spacings=self.input_min_spacings, id=self.id)]
         # self.pipeline = [IntensityAgent(), SingleTaskGPAgent(bounds=torch.tensor(input_bounds))]
 
     # def update_from_config(self):
@@ -437,17 +399,30 @@ class MangerAgent(Agent):
 
     
     def tell(self, x, y):
+        print("ManagerAgent was told about new data")
         # print(x)
         """Tell the Manger about something new"""
         if self.count + 1 == self.max_count:
             return
-        if self.count < self.min_count_to_make_decision:
-            return
+        # print(f'{y[0].values.shape}')
+        resized_y = resize(y[0][0].values, self.dependent_shape, anti_aliasing=False)
+        self.flat_y = resized_y.flatten()
+        self.inputs[self.count+1] = np.concatenate([i.values for i in x])
+        self.flat_targets[self.count] = self.flat_y
+        self.targets[self.count] = resized_y
+
+        self.x = self.inputs[self.count]
+        self.y = resized_y
+
         
-        self.inputs[self.count] = np.concatenate([i.values for i in x])
-        self.targets[self.count] = y[0].values
+        # plt.imshow(resized_y, origin='lower')
+        # plt.savefig(f'save/imgs/img_{self.count:03}.png')
+        # np.save(f'save/raw/raw_{self.count:03}.npy', resized_y)
 
         self.count += 1
+
+        if self.count < self.min_count_to_make_decision:
+            return
 
         # if self.count < self.n_count_before_thinking:
         #     return
@@ -458,35 +433,71 @@ class MangerAgent(Agent):
         """The adaptive plan uses the tell_many method by default, just pass it along."""
         self.tell(xs,ys)
 
+    def is_already_measured(self, pos):
+        return (np.less(np.abs(np.array(pos) - self.inputs[:self.count]), self.input_min_spacings)).all()
+
+    def get_random_position(self):
+        if self.count == 0:
+            return [np.random.uniform(low,high) for low, high in self.input_bounds] 
+
+        allowed_random_attempts = 500
+        for i in range(allowed_random_attempts):
+            random_position = [np.random.uniform(low,high) for low, high in self.input_bounds] 
+            print(f"Positions Measured So Far {self.count}:")
+            # print(self.inputs[:self.count])
+            print("Next position:")
+            print(random_position)
+            already_measured = self.is_already_measured(random_position)
+            # too_close = 
+            print("Was it already measured?")
+            print(already_measured)
+            if already_measured:
+                continue
+            print(f"Took {i+1} tries to get a valid random coordinate.")
+            return random_position
+
     def ask(self, n):
         """Ask the Manager for a new command"""
+        print("ManagerAgent was asked for a new point")
         if n != 1:
             raise NotImplementedError
         if self.count == self.max_count:
             raise NoRecommendation
+        if self.re_manager.abort:
+            raise NoRecommendation
+        
+        
         print("Manager was asked for a point")
         if self.count < self.min_count_to_make_decision:
-            return [np.random.uniform(low,high) for low, high in self.input_bounds]
+            pos = self.get_random_position()
+            return pos
+
         next_point = self.make_decision()
         self.next_point = [np.clip(val, high, low) for val, (high, low) in zip(next_point, self.input_bounds)]
         print(f"Manager suggests point: {self.next_point}")
         return self.next_point
     
     def update_decision_space(self):
-        
-        x, y = self.pipeline[0].tell(self.inputs[:self.count], self.targets[:self.count].reshape(self.count, -1))
-        print("--"*20)
-        print(x)
-        print("--"*20)
-        print(y)
-        print("--"*20)
+        if self.count < self.min_count_to_make_decision:
+            return 
+        x, y = self.pipeline[0].tell(self.inputs[1:self.count], self.flat_targets[:self.count-1])
+        # print("--"*20)
+        # print(x)
+        # print("--"*20)
+        # print(y)
+        # print("--"*20)
         for node in self.pipeline[1:]:
             x, y = node.tell(x,y)
-            print("--"*20)
-            print(x)
-            print("--"*20)
-            print(y)
-            print("--"*20)
+            # print("--"*20)
+            # print(x)
+            # print("--"*20)
+            # print(y)
+            # print("--"*20)
+        # self.save_info()
+        # labels = self.pipeline[0].labels
+        # np.save('save/labels.npy', labels)
+        # np.save('save/positions.npy', self.inputs[:self.count])
+        # np.save(f'save/pca/pc{self.count}.npy',self.pipeline[0].PCA.components_)
 
         # if y is not None:
         #     raise ValueError("The final pipeline node should have returned (decision_space, None)... Something is wrong.")
@@ -501,5 +512,14 @@ class MangerAgent(Agent):
         # frac_position = np.array(i_choice) / np.array(self.decision_space.shape)
         # choice_pos = self.input_bounds[:,0] + frac_position * np.diff(self.input_bounds, axis=1).flatten()
         # return choice_pos
+        # self.get_random_position()
         choice_position = self.pipeline[-1].ask(1)
         return choice_position
+
+    def save_info(self):
+        with open(self.save_positions_path, 'a') as f:
+                np.savetxt(f, self.x)
+        with open(self.save_flat_targets_path, 'a') as f:
+                np.savetxt(f, self.flat_y.T)
+        for node in self.pipeline:
+            node.save_info()

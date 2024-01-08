@@ -71,6 +71,8 @@ class REManagerMotorPositionMessage(BaseModel):
     positions: list[float]
     names: list[str]
 
+class RERestartMessage(BaseModel):
+    message:str = 'Restart'
 
 # Message classes for communications between
 # the FakeLVClient and the Translator

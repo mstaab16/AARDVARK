@@ -13,3 +13,4 @@ pyqt5
 ipython
 pydantic
 dash
+toml

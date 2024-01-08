@@ -1,5 +1,4 @@
-[status]
-stop = false
+stop = False
 
 [axes]
 x = {bounds = [-1.0, 1.0], init = []}
