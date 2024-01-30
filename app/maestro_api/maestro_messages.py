@@ -177,11 +177,3 @@ class MaestroLVPositionResponse(MaestroLVResponse):
     class Config:
         populate_by_name = True
 
-# MaestroLVPositionResponse = RootModel[List[MotorPosition]]
-# class MaestroLVPositionResponse(BaseModel):
-#     __root__: List[MotorPosition]
-
-#     class Config:
-#         populate_by_name = True
-
-

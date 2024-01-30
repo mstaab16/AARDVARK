@@ -1,0 +1,13 @@
+pydantic
+pydantic-settings
+sqlalchemy
+psycopg2-binary
+celery
+redis
+
+numpy
+scipy
+scikit-learn
+# gpytorch
+# torch
+# torchvision
