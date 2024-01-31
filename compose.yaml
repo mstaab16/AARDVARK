@@ -67,7 +67,7 @@ services:
       - .env
     environment:
       - DATABASE_URL=postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
-    command: celery -A celery_workers.tasks worker --loglevel=info #  --pool=solo
+    command: celery -A celery_workers.tasks worker --loglevel=info --pool=solo
     volumes:
       - ./app:/app
     depends_on:

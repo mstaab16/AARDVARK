@@ -1,16 +1,18 @@
-from celery import Celery, Task
 import time
 import numpy as np
-import json
+import base64
+
+from sqlalchemy.orm import load_only
 
 from db.database import get_db
 from db.models import Experiment, Decision, Measurement, Data, Report
 
-# from celery_workers import agents
+from celery_workers import agents
+from celery_workers.celery_app import app
 
 from maestro_api import maestro_messages as mm
 
-app = Celery('tasks', broker='redis://redis/0', backend='redis://redis/0')
+
 # db_gen = get_db()
 # db = next(db_gen)
 # db = next(get_db())
@@ -28,11 +30,15 @@ class ExperimentWatcher:
         self.max_positions_per_motor = [int(np.ceil((motor.high - motor.low) / motor.min_step)) for motor in self.motors]
         self.all_possible_measurement_indices = np.arange(np.prod(self.max_positions_per_motor))
         self.measured_indices = np.array([])
+        self.data_ids = []
+        self.data_indices = []
+        self.x = []
+        self.y = []
         
-        # self.pipeline = [
-        #     agents.KMeansAgent(n_clusters=4, experiment_id=self.experiment_id), 
-        #     agents.GPytorchAgent(input_bounds=[[low,high] for low, high in zip(self.motor_lows, self.motor_highs)], input_min_spacings=self.motor_min_steps, experiment_id=self.experiment_id)
-        #     ]
+        self.pipeline = [
+            agents.KMeansAgent(n_clusters=4, experiment_id=self.experiment_id), 
+            agents.GPytorchAgent(input_bounds=[[low,high] for low, high in zip(self.motor_lows, self.motor_highs)], input_min_spacings=self.motor_min_steps, experiment_id=self.experiment_id)
+            ]
 
     def run(self):
         # Create the first decision
@@ -46,6 +52,8 @@ class ExperimentWatcher:
 
         # Create the first measurements
         measurements = self.create_random_measurements(num_random_measurements, new_decision.decision_id)
+        self.db.add_all(measurements)
+        self.db.commit()
 
         while True:
             # Check if experiment is still active
@@ -53,15 +61,21 @@ class ExperimentWatcher:
             if not self.experiment.active:
                 print("Experiment is no longer active. Shutting down...")
                 return
+            self.update_data()
+            print(self.data_ids)
+            if len(self.data_ids) < 5:
+                print("Not enough data to train on")
+                time.sleep(1)
+                continue
             self.measured_positions = self.db.query(Measurement.positions).filter(Measurement.experiment_id == self.experiment_id).all()
             # print("*"*20, f"{len(measured_positions)=}")
             self.measured_positions = np.array([list(x[0].values()) for x in self.measured_positions])
             if len(self.measured_positions) > 0:
                 self.measured_indices = position_to_index(self.measured_positions, self.motor_lows, self.motor_min_steps, self.max_positions_per_motor)
             #     print("*"*20, f"{measured_indices.shape=}")
-                print(len(self.measured_indices))
-                print(len(np.unique(self.measured_indices)))
-                print(self.measured_indices)
+                # print(len(self.measured_indices))
+                # print(len(np.unique(self.measured_indices)))
+                # print(self.measured_indices)
             #     self.all_positions_measured = np.zeros(self.max_positions_per_motor, dtype=np.bool_)
             #     self.all_positions_measured[*measured_indices.T] = True
                 # self.all_positions_measured[measured_indices.T] = True
@@ -73,7 +87,7 @@ class ExperimentWatcher:
             self.db.commit()
 
             # Calculate next moves
-            self.get_all_data()
+            
             # time.sleep(1)
             # remaining_measurements = np.prod(self.max_positions_per_motor) - self.all_positions_measured.sum()
             # num = np.min([num, remaining_measurements])
@@ -81,8 +95,9 @@ class ExperimentWatcher:
             if len(self.measured_indices) == len(self.all_possible_measurement_indices):
                 print("All measurements have been suggested?!?!?")
                 continue
-            num=5
-            measurements = self.create_random_measurements(num, decision.decision_id)
+            num=25
+            # measurements = self.create_random_measurements(num, decision.decision_id)
+            measurements = self.create_smart_measurements(num, decision.decision_id)
             # non_duplicates = []
             # for measurement in measurements:
             #     idx = position_to_index(np.array([list(measurement.positions.values())]), self.motor_lows, self.motor_min_steps, self.max_positions_per_motor)
@@ -100,13 +115,44 @@ class ExperimentWatcher:
             # Commit the changes
             self.db.commit()
 
-    def get_all_data(self):
+    def update_data(self):
+        print("*"*20)
         print('Getting all data')
         start = time.perf_counter_ns()
-        data = self.db.query(Data).filter(Data.experiment_id == self.experiment_id, Data.fieldname == 'Fixed_Spectra0').all()
-        data = np.array([json.loads(x.data) for x in data])
-        print(f'Got all data in {(time.perf_counter_ns() - start) / 1e9} seconds')
-        return data
+        query = self.db.query(Measurement.positions, Data.data_id, Data.data).join(Measurement.data)\
+                .filter(~Data.data_id.in_(self.data_ids))\
+                .filter(Measurement.experiment_id == self.experiment_id, Data.fieldname == 'Fixed_Spectra0').all()
+        for pos, data_id, data in query:
+            self.data_ids.append(data_id)
+            self.data_indices.append(position_to_index(np.array([list(pos.values())]), self.motor_lows, self.motor_min_steps, self.max_positions_per_motor))
+            self.x.append(np.array(list(pos.values())))
+            self.y.append(np.frombuffer(base64.decodebytes(data), dtype=np.int32).reshape(128,128).flatten())
+        # positions_and_ids = self.db.query(Measurement.positions, Data.data_id).join(Measurement.data).filter(Measurement.experiment_id == self.experiment_id, Data.fieldname == 'Fixed_Spectra0').all()
+        # if len(positions_and_ids) == 0:
+        #     print("No data found")
+        #     return
+        # positions = np.array([list(pos.values()) for pos, _ in positions_and_ids])
+        # all_data_ids = np.array([i for _, i in positions_and_ids])
+        # indices = position_to_index(positions, self.motor_lows, self.motor_min_steps, self.max_positions_per_motor)
+        # print(f'{indices=}')
+        # print(f'{all_data_ids=}')
+        # # keep_indices = np.where(np.isin(indices, self.data_indices, invert=True))
+        # keep_indices = np.setdiff1d(indices, self.data_indices)
+        # print(f'{keep_indices=}')
+        # new_ids = all_data_ids[keep_indices].tolist()
+        # if len(new_ids) == 0:
+        #     print("No new data found")
+        #     return
+        # new_stuff = self.db.query(Data.data_id, Data.data, Measurement.positions).join(Data.measurement).filter(Data.data_id.in_(new_ids)).order_by(Data.data_id).all()
+        # print(f"Found {len(new_stuff)} new data points")
+        # self.data_indices.extend(keep_indices)
+        # self.data_ids.extend([i for i, _, _ in new_stuff])
+        # self.x.extend([np.array(list(pos.values())) for _, _, pos in new_stuff])
+        # self.y.extend([np.frombuffer(base64.decodebytes(d)).reshape(128,128) for _, d, _ in new_stuff])
+        # # self.x.update({idx: np.array(list(pos.values())) for idx, _, pos in new_stuff})
+        # # self.y.update({idx: d for idx, d, _ in new_stuff})
+
+        print(f'Updated data in {(time.perf_counter_ns() - start) / 1e9} seconds')
 
     def create_random_measurements(self, num_measurements, decision_id):
         decision = self.db.query(Decision).get(decision_id)
@@ -122,21 +168,23 @@ class ExperimentWatcher:
             measurements.append(measurement)
         return measurements
 
-    # def create_smart_measurements(self, num_measurements, decision_id):
-    #     decision = self.db.query(Decision).get(decision_id)
-    #     experiment = self.db.query(Experiment).get(decision.experiment_id)
+    def create_smart_measurements(self, num_measurements, decision_id):
+        decision = self.db.query(Decision).get(decision_id)
+        experiment = self.db.query(Experiment).get(decision.experiment_id)
 
-    #     x = self.measured_positions
-    #     y = self.get_all_data()
-    #     for agent in self.pipeline:
-    #         x, y = agent.tell(x)
-    #     measurements = []
-    #     for position in agent.ask(num_measurements):
-    #         pos_dict = {motor.device_name: position[i] for i, motor in enumerate(self.motors)}
-    #         measurement = Measurement(experiment_id=experiment.experiment_id, decision_id=decision_id,
-    #                                 positions=pos_dict, measured=False, measurement_time="", ai_cycle=None)
-    #         measurements.append(measurement)
-    #     return measurements 
+        x = np.array(self.x)
+        y = np.array(self.y)
+        for agent in self.pipeline:
+            x, y = agent.tell(x, y)
+        measurements = []
+        # agent_output = agent.ask(num_measurements)
+        # print(agent_output)
+        for position in agent.ask(num_measurements):
+            pos_dict = {motor.device_name: float(position[i]) for i, motor in enumerate(self.motors)}
+            measurement = Measurement(experiment_id=experiment.experiment_id, decision_id=decision_id,
+                                    positions=pos_dict, measured=False, measurement_time="", ai_cycle=None)
+            measurements.append(measurement)
+        return measurements 
 
 @app.task
 def setup_experiment_watcher(experiment_id):

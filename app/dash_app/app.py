@@ -12,6 +12,7 @@ import base64
 
 from db.database import get_db
 from db.models import Experiment, Decision, Measurement, Data, Report
+from sqlalchemy import func
 from maestro_api import maestro_messages as mm
 
 app = dash.Dash(__name__,#  external_stylesheets=[dbc.themes.BOOTSTRAP]
@@ -86,8 +87,8 @@ def update_bar_chart(n, experiment_id):
             # color="species", size='petal_length', 
             # hover_data=['petal_width'])
         )
-        fig.update_xaxes(range=[-10, 10])
-        fig.update_yaxes(range=[-10, 10])
+        fig.update_xaxes(range=[0, 1])
+        fig.update_yaxes(range=[0, 1])
         return fig
     except:
         fig = px.scatter(width=500, height=500)
@@ -104,16 +105,15 @@ def update_bar_chart(n, experiment_id):
     try:
         db_gen = get_db()
         db = next(db_gen)
-        data = db.query(Data).filter(Data.experiment_id == experiment_id, Data.fieldname == "Fixed_Spectra0").order_by(Data.measurement_id.desc()).first().data
-        # df = pd.read_sql(query.statement, query.session.bind)
-        data = mm.FitsDescriptor.model_validate_json(json.loads(data)).Data
+        data, data_info = db.query(Data.data, Data.data_info).filter(Data.experiment_id == experiment_id, Data.fieldname == "Fixed_Spectra0").order_by(Data.measurement_id.desc()).first()
+        data_info = json.loads(data_info)
         data =  base64.decodebytes(data)
-        data = np.frombuffer(data, dtype=np.int32).reshape((64,64))
+        data = np.frombuffer(data, dtype=np.int32).reshape(*data_info['dimensions'])
         fig = px.imshow(data)
     except Exception as e:
         print(e)
         # pass
-        fig = px.imshow(np.random.uniform(0,1,(64,64)), width=500, height=500)
+        fig = px.imshow(np.random.uniform(0,1,(8,8)), width=500, height=500)
         # fig.update_xaxes(range=[-10, 10])
         # fig.update_yaxes(range=[-10, 10])
     return fig

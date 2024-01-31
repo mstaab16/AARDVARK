@@ -246,7 +246,7 @@ class MultitaskGPModel(gpytorch.models.ExactGP):
 class GPytorchAgent(Agent):
     """A simple naive agent that cycles samples sequentially in environment space"""
 
-    def __init__(self, input_bounds, input_min_spacings, id):
+    def __init__(self, input_bounds, input_min_spacings, experiment_id):
         print("Creating GPytorchAgent")
         self.id = id
         self.input_bounds = input_bounds
@@ -257,6 +257,7 @@ class GPytorchAgent(Agent):
         p = [np.arange(low, high, delta) for (low, high), delta in zip(self.input_bounds, self.input_min_spacings)]
         self.meshgrid_points = np.meshgrid(*p)
         self.all_possible_positions = torch.stack([torch.tensor(arr.flatten(),dtype=torch.float32).to(self.device) for arr in self.meshgrid_points],dim=1)
+        self.experiment_id = experiment_id
         print(f"Total number of possible position is ~{self.all_possible_positions.shape}")
 
     def tell(self, x, y):

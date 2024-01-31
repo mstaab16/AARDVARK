@@ -33,8 +33,8 @@ class FakeLV:
         msg = MaestroLVStartupMessage(
             AI_Controller = 'Aardvark',
             AIModeparms=[
-                AIModeparm(device_name="motors::X", enabled_=True, high=10, low=-10, min_step=1.99),
-                AIModeparm(device_name="motors::Y", enabled_=True, high=10, low=-10, min_step=1.99)
+                AIModeparm(device_name="motors::X", enabled_=True, low=0, high=1, min_step=0.01),
+                AIModeparm(device_name="motors::Y", enabled_=True, low=0, high=1, min_step=0.01)
             ],
             # This is the number of AI cycles to go through
             max_count=self.max_ai_cycle,
@@ -158,7 +158,7 @@ class FakeLV:
             fac = 0.1
         if self.position.positions[0].value > 0.2:
             fac = 2
-        data_shape = (1024, 1024)
+        data_shape = (128, 128)
         return (fac*np.random.uniform(0,1e7, data_shape)).astype(np.int32)
 
 

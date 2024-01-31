@@ -1,4 +1,5 @@
-from sqlalchemy import Boolean, Column, ForeignKey, Integer, String, JSON
+from sqlalchemy import Boolean, Column, ForeignKey, Integer, String, JSON, LargeBinary
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import relationship
 
 from db.database import Base
@@ -7,7 +8,7 @@ class Experiment(Base):
     __tablename__ = "experiment"
 
     experiment_id = Column(Integer, primary_key=True)
-    motors = Column(JSON)
+    motors = Column(JSONB)
     data_filepath = Column(String, default="")
     active = Column(Boolean, default=True)
 
@@ -22,7 +23,7 @@ class Measurement(Base):
     measurement_id = Column(Integer, primary_key=True)
     experiment_id = Column(Integer, ForeignKey("experiment.experiment_id"))
     decision_id = Column(Integer, ForeignKey("decision.decision_id"))
-    positions = Column(JSON)
+    positions = Column(JSONB)
     measured = Column(Boolean, default=False)
     measurement_time = Column(String, default="")
     ai_cycle = Column(Integer, default=None)
@@ -40,8 +41,8 @@ class Data(Base):
     message = Column(String)
     fieldname = Column(String)
     data_cycle = Column(Integer)
-    data_info = Column(JSON)
-    data = Column(JSON)
+    data = Column(LargeBinary)
+    data_info = Column(JSONB)
 
     measurement = relationship("Measurement", back_populates="data")
     experiment = relationship("Experiment", back_populates="data")
@@ -51,7 +52,7 @@ class Decision(Base):
 
     decision_id = Column(Integer, primary_key=True)
     experiment_id = Column(Integer, ForeignKey("experiment.experiment_id"))
-    method = Column(JSON)
+    method = Column(JSONB)
 
     experiment = relationship("Experiment", back_populates="decisions")
     measurements = relationship("Measurement", back_populates="decision")
@@ -62,9 +63,9 @@ class Report(Base):
     report_id = Column(Integer, primary_key=True)
     experiment_id = Column(Integer, ForeignKey("experiment.experiment_id"))
     name = Column(String)
-    args = Column(JSON)
+    args = Column(JSONB)
     description = Column(String)
-    data = Column(JSON)
+    data = Column(JSONB)
     time = Column(String)
 
     experiment = relationship("Experiment", back_populates="reports")

@@ -8,6 +8,6 @@ redis
 numpy
 scipy
 scikit-learn
-# gpytorch
-# torch
+gpytorch
+torch
 # torchvision

@@ -1,7 +1,9 @@
 from fastapi import FastAPI, Depends, BackgroundTasks
 
 from . import maestro_messages as mm
-import celery_workers.tasks as tasks
+# import celery_workers.tasks as tasks
+# from celery.execute import send_task
+from celery_workers.celery_app import app as celery_app
 
 from db.models import Experiment, Measurement, Data, Decision, Report
 
@@ -37,7 +39,9 @@ def initialize(startup: mm.MaestroLVStartupMessage, background_tasks: Background
     db.commit()
     experiment_id = db.query(Experiment).order_by(Experiment.experiment_id.desc()).first().experiment_id
 
-    background_tasks.add_task(tasks.setup_experiment_watcher, experiment_id)
+    print("Sending task to setup experiment watcher")
+    celery_app.send_task("celery_workers.tasks.setup_experiment_watcher", args=(experiment_id,))
+    print("Sent task to setup experiment watcher")
 
     # TODO: Need to return experiment id to LabView
     return mm.MaestroLVResponseOK()
@@ -52,13 +56,17 @@ def process_data(data: mm.MaestroLVDataMessage, db: Session):
     #     # db.update()
     current_measurement.ai_cycle = data.message.current_AI_cycle
     for fd in data.fits_descriptors:
+        fd_without_data = dict(fd)
+        del fd_without_data["Data"]
+        
         new_data = Data(
             experiment_id = experiment_id,
             measurement_id = current_measurement.measurement_id,
-            message = json.dumps(data.message.model_dump_json()),
+            message = data.message.model_dump_json(),
             fieldname = fd.fieldname,
             data_cycle = data.message.current_data_cycle,
-            data = json.dumps(fd.model_dump_json())
+            data = fd.Data,
+            data_info = json.dumps(fd_without_data),
         )
         db.add(new_data)
     db.commit()
@@ -129,7 +137,7 @@ def abort(message: mm.MaestroLVAbortMessage, db: Session = Depends(get_db)):
 #     tasks.try_db.delay()
 #     print(result.get(timeout=3))
 
-@maestro_app.post("/test")
-def test(background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
-    background_tasks.add_task(tasks.compute_new_moves.delay)
-    return {"message": "Started background task"}
+# @maestro_app.post("/test")
+# def test(background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
+#     background_tasks.add_task(celery.signature("compute_new_moves").delay)
+#     return {"message": "Started background task"}
