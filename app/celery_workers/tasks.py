@@ -12,7 +12,6 @@ from celery_workers.celery_app import app
 
 from maestro_api import maestro_messages as mm
 
-
 # db_gen = get_db()
 # db = next(db_gen)
 # db = next(get_db())
@@ -36,24 +35,44 @@ class ExperimentWatcher:
         self.y = []
         
         self.pipeline = [
-            agents.KMeansAgent(n_clusters=4, experiment_id=self.experiment_id), 
+            agents.KMeansAgent(n_clusters=7, experiment_id=self.experiment_id), 
             agents.GPytorchAgent(input_bounds=[[low,high] for low, high in zip(self.motor_lows, self.motor_highs)], input_min_spacings=self.motor_min_steps, experiment_id=self.experiment_id)
             ]
 
     def run(self):
         # Create the first decision
-        num_random_measurements = 10
 
-        new_decision = Decision(
+        
+        num_random_measurements = 25
+        num_boundary_measurements = 10
+
+        startup_decision = Decision(
             experiment_id = self.experiment_id,
-            method = f"Startup: {num_random_measurements} random measurements.")
-        self.db.add(new_decision)
+            method = f"Startup: Corners and {num_random_measurements} random measurements.")
+        self.db.add(startup_decision)
         self.db.commit()
+
+        corners = [[self.motor_lows[0], self.motor_lows[1]],
+                   [self.motor_highs[0], self.motor_lows[1]],
+                   [self.motor_lows[0], self.motor_highs[1]],
+                   [self.motor_highs[0], self.motor_highs[1]],
+                   ]
+        boundary_measurements = []
+        boundary_measurements.extend([[self.motor_lows[0], y] for y in np.linspace(self.motor_lows[1], self.motor_highs[1], num_boundary_measurements)])
+        boundary_measurements.extend([[x, self.motor_highs[1]] for x in np.linspace(self.motor_lows[0], self.motor_highs[0], num_boundary_measurements)])
+        boundary_measurements.extend([[self.motor_highs[0], y] for y in np.linspace(self.motor_lows[1], self.motor_highs[1], num_boundary_measurements)[::-1]])
+        boundary_measurements.extend([[x, self.motor_lows[1]] for x in np.linspace(self.motor_lows[0], self.motor_highs[0], num_boundary_measurements)[::-1]])
+        for pos in boundary_measurements:
+            pos_dict = {motor.device_name: pos[i] for i, motor in enumerate(self.motors)}
+            measurement = Measurement(experiment_id=self.experiment.experiment_id, decision_id=startup_decision.decision_id,
+                                    positions=pos_dict, measured=False, measurement_time="", ai_cycle=None)
+            self.db.add(measurement)
 
         # Create the first measurements
-        measurements = self.create_random_measurements(num_random_measurements, new_decision.decision_id)
+        measurements = self.create_random_measurements(num_random_measurements, startup_decision.decision_id)
         self.db.add_all(measurements)
         self.db.commit()
+        # time.sleep(5)
 
         while True:
             # Check if experiment is still active
@@ -63,7 +82,7 @@ class ExperimentWatcher:
                 return
             self.update_data()
             print(self.data_ids)
-            if len(self.data_ids) < 5:
+            if len(self.data_ids) < 4*num_boundary_measurements + num_random_measurements - 20:
                 print("Not enough data to train on")
                 time.sleep(1)
                 continue
@@ -152,7 +171,7 @@ class ExperimentWatcher:
         # # self.x.update({idx: np.array(list(pos.values())) for idx, _, pos in new_stuff})
         # # self.y.update({idx: d for idx, d, _ in new_stuff})
 
-        print(f'Updated data in {(time.perf_counter_ns() - start) / 1e9} seconds')
+        print(f'Updated with {len(query)} new datasets in {(time.perf_counter_ns() - start) / 1e9} seconds.')
 
     def create_random_measurements(self, num_measurements, decision_id):
         decision = self.db.query(Decision).get(decision_id)
@@ -193,7 +212,7 @@ def setup_experiment_watcher(experiment_id):
 
 def position_to_index(positions, motor_lows, motor_min_steps, max_positions_per_motor):
     indices = np.floor((positions - motor_lows) / motor_min_steps).astype(np.int_).T
-    return np.ravel_multi_index(indices, max_positions_per_motor)
+    return np.ravel_multi_index(indices, max_positions_per_motor, mode='clip')
 
 def index_to_position(indices, motor_lows, motor_min_steps, max_positions_per_motor):
     indices = np.array(np.unravel_index(indices, max_positions_per_motor))

@@ -13,12 +13,22 @@ from sqlalchemy.orm.exc import StaleDataError
 
 import json
 import asyncio
+import numpy as np
+import base64
+import pickle
+from skimage.transform import resize
 
 maestro_app = FastAPI()
 
 
-@maestro_app.get("/")
-def health_check():
+@maestro_app.get("/test")
+def get_health_check():
+    return mm.MaestroLVResponseOK()
+
+@maestro_app.post("/test")
+def post_health_check(message: mm.MaestroLVResponseOK):
+    print('Message recieved:')
+    print(message)
     return mm.MaestroLVResponseOK()
 
 ########################################################################################
@@ -69,6 +79,15 @@ def process_data(data: mm.MaestroLVDataMessage, db: Session):
             data_info = json.dumps(fd_without_data),
         )
         db.add(new_data)
+
+        if fd.fieldname == 'Fixed_Spectrum0':
+            image = np.frombuffer(base64.decodebytes(fd.Data), dtype=np.int32).reshape(128,128)
+            thumbnail = resize(image, (64,64), anti_aliasing=True)
+            # thumbnail /= np.max(thumbnail)
+            # thumbnail *= 1e9
+            # thumbnail = thumbnail.astype(np.int32)
+            current_measurement.thumbnail = pickle.dumps(thumbnail)
+
     db.commit()
     # if this is the last data cycle, mark measurement as measured
     # if True: #data.message.current_data_cycle == 0:
@@ -83,8 +102,9 @@ def data(data: mm.MaestroLVDataMessage, background_tasks: BackgroundTasks, db: S
     background_tasks.add_task(process_data, data, db)
     return mm.MaestroLVResponseOK()
 
-@maestro_app.post("/request_next_position/")
+@maestro_app.post("/request_next_position")
 async def next_position(pos_req: mm.MaestroLVPositionRequest, db: Session = Depends(get_db)) -> mm.MaestroLVPositionResponse:
+    print("*"*10 + "TRYING TO GET A NEW POSITION" + "*"*10)
     # Get the next position from the database
     experiment = db.query(Experiment).order_by(Experiment.experiment_id.desc()).first()
     while True:
@@ -108,7 +128,8 @@ async def next_position(pos_req: mm.MaestroLVPositionRequest, db: Session = Depe
                 positions=[mm.MotorPosition(axis_name=axis_name, value=next_measurement.positions[axis_name])
                             for axis_name in next_measurement.positions]
             )
-    print("Returning Position....")
+    print("*"*10 + "RETURNING POSITION" + "*"*10)
+    # print("Returning Position....")
     return pos_response
 
 @maestro_app.post("/close")

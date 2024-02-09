@@ -2,25 +2,24 @@ import requests
 import numpy as np
 import base64
 from app.maestro_api.maestro_messages import *
+from fake_crystals import FakeVoronoiCrystal
 import time
 
 class FakeLV:
-    def __init__(self, translator_addr = 'http://einstein.dhcp.lbl.gov/maestro'):
+    def __init__(self):
         self.aardvark_url = "http://127.0.0.1/maestro"
 
         self.current_ai_cycle = 0
         self.current_data_cycle = 0
-        self.max_ai_cycle = 121
+        self.max_ai_cycle = 500
+        self.measurement_delay = 0.25
+        self.num_energies = 128
+        self.num_angles = 128
+        self.dead_time = 0
+        self.start_time = time.perf_counter()
+        self.fake_crystal = FakeVoronoiCrystal(num_angles = self.num_angles, num_energies = self.num_energies)
         self.startup()
         self.operation_loop()
-
-    # def get_translator_response(self):
-    #     msg: MaestroLVResponse = self.socket.recv_json()
-    #     if msg.get("status") == MaestroLVResponseError().status:
-    #         print("Recieved an Error from the Translator...\nShutting down...")
-    #         exit()
-    #     return msg
-
 
     def startup(self):
         # msg = FakeLVStartupMessage(
@@ -32,9 +31,13 @@ class FakeLV:
         # )
         msg = MaestroLVStartupMessage(
             AI_Controller = 'Aardvark',
+            # AIModeparms=[
+            #     AIModeparm(device_name="motors::X", enabled_=True, low=0, high=1, min_step=0.01),
+            #     AIModeparm(device_name="motors::Y", enabled_=True, low=0, high=1, min_step=0.01)
+            # ],
             AIModeparms=[
-                AIModeparm(device_name="motors::X", enabled_=True, low=0, high=1, min_step=0.01),
-                AIModeparm(device_name="motors::Y", enabled_=True, low=0, high=1, min_step=0.01)
+                AIModeparm(device_name="motors::X", enabled_=True, low=-10, high=10, min_step=0.01),
+                AIModeparm(device_name="motors::Y", enabled_=True, low=-10, high=10, min_step=0.01)
             ],
             # This is the number of AI cycles to go through
             max_count=self.max_ai_cycle,
@@ -69,8 +72,13 @@ class FakeLV:
     def operation_loop(self):
         while True:
             print(f"LV: Sending position request {self.current_ai_cycle}")
+            ellapsed_time = time.perf_counter() - self.start_time
+            dead_fraction = self.dead_time / ellapsed_time
+            print(f"Experiment time: {ellapsed_time/60:0.2f}min\tDead time: {self.dead_time/60:0.2f}min | {dead_fraction:0.2%}")
+            start = time.perf_counter()
             self.request_position()
-            print("LV: Sending data for that position...")
+            time_waiting_for_position = time.perf_counter() - start
+            self.dead_time += time_waiting_for_position
             self.send_data()
             self.current_ai_cycle += 1
             self.current_data_cycle = 0
@@ -88,7 +96,8 @@ class FakeLV:
         self.position = MaestroLVPositionResponse(**response)
 
     def send_data(self):
-        # time.sleep(.1)
+        print("Taking Data...")
+        time.sleep(self.measurement_delay)
         data = self.generate_data()
         data_bytes = data.tobytes(order='F')
         data_message = DataMessage(
@@ -147,19 +156,23 @@ class FakeLV:
                     )
                 ]
                 )
+        print("Sending Data...")
         response = self.post_to_aardvark("/data/", message)
         self.current_data_cycle += 1
         print(f'LV: Recieved msg after sending data: {response}')
     
     def generate_data(self):
-        print(self.position)
-        fac = 1
-        if self.position.positions[0].value < 0:
-            fac = 0.1
-        if self.position.positions[0].value > 0.2:
-            fac = 2
-        data_shape = (128, 128)
-        return (fac*np.random.uniform(0,1e7, data_shape)).astype(np.int32)
+        # print(self.position)
+        # fac = 1
+        # if self.position.positions[0].value < 0:
+        #     fac = 0.1
+        # if self.position.positions[0].value > 0.2:
+        #     fac = 2
+        # data_shape = (128, 128)
+        # return (fac*np.random.uniform(0,1e7, data_shape)).astype(np.int32)
+        x, y = [motor_position.value for motor_position in self.position.positions]
+        measured_x, measured_y, measured_data = self.fake_crystal.measure(x,y)
+        return (measured_data * 1e6).astype(np.int32)
 
 
 f = FakeLV()

@@ -8,6 +8,9 @@ from gpytorch.likelihoods import DirichletClassificationLikelihood
 from gpytorch.means import ConstantMean
 from gpytorch.kernels import ScaleKernel, RBFKernel
 from scipy.ndimage import gaussian_filter
+import tqdm
+
+import matplotlib.pyplot as plt
 
 
 from typing import Callable, Dict, Iterable, List, Literal, Optional, Sequence, Tuple, TypedDict, Union
@@ -214,11 +217,13 @@ class KMeansAgent(Agent):
             self.KMeans = KMeans(n_clusters=self.n_clusters)
             self.KMeans.fit(y)
             self.labels = self.KMeans.labels_
+            new_y = self.labels
 
-            new_y = np.zeros((len(self.KMeans.labels_), self.kwargs.get('n_clusters')))
-            for i, label in enumerate(self.KMeans.labels_):
-                new_y[i,label] = 1
+        #     new_y = np.zeros((len(self.KMeans.labels_), self.kwargs.get('n_clusters')))
+        #     for i, label in enumerate(self.KMeans.labels_):
+        #         new_y[i,label] = 1
         return x, new_y
+        
     
     def ask(self, batch_size):
         raise NotImplementedError
@@ -227,34 +232,47 @@ class KMeansAgent(Agent):
         raise NotImplementedError
 
 
-class MultitaskGPModel(gpytorch.models.ExactGP):
-    def __init__(self, train_x, train_y, likelihood):
-        super(MultitaskGPModel, self).__init__(train_x, train_y, likelihood)
-        self.mean_module = gpytorch.means.MultitaskMean(
-            gpytorch.means.ConstantMean(), num_tasks=train_y.shape[1]
-        )
-        self.covar_module = gpytorch.kernels.MultitaskKernel(
-            gpytorch.kernels.RBFKernel(), num_tasks=train_y.shape[1], rank=1
+# class MultitaskGPModel(gpytorch.models.ExactGP):
+#     def __init__(self, train_x, train_y, likelihood):
+#         super(MultitaskGPModel, self).__init__(train_x, train_y, likelihood)
+#         self.mean_module = gpytorch.means.MultitaskMean(
+#             gpytorch.means.ConstantMean(), num_tasks=train_y.shape[1]
+#         )
+#         self.covar_module = gpytorch.kernels.MultitaskKernel(
+#             gpytorch.kernels.RBFKernel(), num_tasks=train_y.shape[1], rank=1
+#         )
+
+#     def forward(self, x):
+#         mean_x = self.mean_module(x)
+#         covar_x = self.covar_module(x)
+#         return gpytorch.distributions.MultitaskMultivariateNormal(mean_x, covar_x)
+class DirichletGPModel(ExactGP):
+    def __init__(self, train_x, train_y, likelihood, num_classes):
+        super(DirichletGPModel, self).__init__(train_x, train_y, likelihood)
+        self.mean_module = ConstantMean(batch_shape=torch.Size((num_classes,)))
+        self.covar_module = ScaleKernel(
+            RBFKernel(batch_shape=torch.Size((num_classes,))),
+            batch_shape=torch.Size((num_classes,)),
         )
 
     def forward(self, x):
         mean_x = self.mean_module(x)
         covar_x = self.covar_module(x)
-        return gpytorch.distributions.MultitaskMultivariateNormal(mean_x, covar_x)
-
+        return gpytorch.distributions.MultivariateNormal(mean_x, covar_x)
 
 class GPytorchAgent(Agent):
     """A simple naive agent that cycles samples sequentially in environment space"""
 
     def __init__(self, input_bounds, input_min_spacings, experiment_id):
         print("Creating GPytorchAgent")
-        self.id = id
         self.input_bounds = input_bounds
         self.input_min_spacings = input_min_spacings
         self.inputs=None
         self.targets=None
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        p = [np.arange(low, high, delta) for (low, high), delta in zip(self.input_bounds, self.input_min_spacings)]
+        print("THE DEVICE BEING USED IS: ", self.device)
+        # p = [np.arange(low, high, delta) for (low, high), delta in zip(self.input_bounds, self.input_min_spacings)]
+        p = [np.linspace(low, high, 256) for (low, high) in self.input_bounds]
         self.meshgrid_points = np.meshgrid(*p)
         self.all_possible_positions = torch.stack([torch.tensor(arr.flatten(),dtype=torch.float32).to(self.device) for arr in self.meshgrid_points],dim=1)
         self.experiment_id = experiment_id
@@ -263,14 +281,14 @@ class GPytorchAgent(Agent):
     def tell(self, x, y):
         print(f"GPytorchAgent told about new data: {x.shape=}, {y.shape=}")
         # return np.ones(self.decicion_space_shape), None
-        if self.inputs is None:
+        if True: #self.inputs is None:
             self.inputs = torch.atleast_2d(torch.tensor(x, device=self.device, dtype=torch.float32))
-            self.targets = torch.atleast_1d(torch.tensor(y, device=self.device, dtype=torch.float32))
-        else:
-            self.inputs = torch.cat([self.inputs, torch.atleast_2d(torch.tensor(x, device=self.device, dtype=torch.float32))], dim=0)
-            self.targets = torch.cat([self.targets, torch.atleast_1d(torch.tensor(y, device=self.device, dtype=torch.float32))], dim=0)
-            self.inputs.to(self.device)
-            self.targets.to(self.device)
+            self.targets = torch.atleast_1d(torch.tensor(y, device=self.device, dtype=torch.int32))
+        # else:
+        #     self.inputs = torch.cat([self.inputs, torch.atleast_2d(torch.tensor(x, device=self.device, dtype=torch.float32))], dim=0)
+        #     self.targets = torch.cat([self.targets, torch.atleast_1d(torch.tensor(y, device=self.device, dtype=torch.int32))], dim=0)
+        #     self.inputs.to(self.device)
+        #     self.targets.to(self.device)
         self.fit()
         return x, y
         # self.surrogate_model.set_train_data(self.inputs, self.targets, strict=False)
@@ -278,24 +296,15 @@ class GPytorchAgent(Agent):
 
     def fit(self):# model, likelihood, train_x, train_y):
         print("Fitting GP")
-        # indices = np.arange(train_x.shape[0])
-        # max(int(np.ceil(train_x.shape[0]*0.2)), min(train_x.shape[0], 100))
-        # print(min(train_x.shape[0], min(100,int(np.ceil(train_x.shape[0]*0.2)))))
-        # indices = np.random.choice(indices, size=min(train_x.shape[0], 1000), replace=False)
-        # train_x = train_x[indices]
-        # train_y = train_y[indices]
         train_x = self.inputs
         train_y = self.targets
-        # if torch.cuda.is_available():
-        #     train_x = train_x.cuda()
-        #     train_y = train_y.cuda()
 
-        likelihood = gpytorch.likelihoods.MultitaskGaussianLikelihood(num_tasks=train_y.shape[1])
-        model = MultitaskGPModel(train_x, train_y, likelihood)
-        
-        # if torch.cuda.is_available():
-        #     model = model.cuda()
-        #     likelihood = likelihood.cuda()
+        # likelihood = gpytorch.likelihoods.MultitaskGaussianLikelihood(num_tasks=train_y.shape[1])
+        # model = MultitaskGPModel(train_x, train_y, likelihood)
+        likelihood = DirichletClassificationLikelihood(train_y, learn_additional_noise=False)
+        # likelihood = DirichletClassificationLikelihood(train_y, learn_additional_noise=True)
+        model = DirichletGPModel(train_x, likelihood.transformed_targets, likelihood, num_classes=likelihood.num_classes)
+
         model.to(self.device)
         likelihood.to(self.device)
 
@@ -312,9 +321,12 @@ class GPytorchAgent(Agent):
         training_iterations = 50
         print("Training GP")
         for i in range(training_iterations):
+        # iterator = tqdm.tqdm(range(training_iterations))
+        # for i in iterator:
             optimizer.zero_grad()
             output = model(train_x)
-            loss = -mll(output, train_y)
+            # loss = -mll(output, train_y)
+            loss = -mll(output, likelihood.transformed_targets).sum()
             loss.backward()
             print('Iter %d/%d - Loss: %.3f' % (i + 1, training_iterations, loss.item()))
             optimizer.step()
@@ -322,32 +334,79 @@ class GPytorchAgent(Agent):
         model.eval()
         likelihood.eval()
 
-        with torch.no_grad(), gpytorch.settings.fast_pred_var(), gpytorch.settings.max_root_decomposition_size(100):
+        with torch.no_grad(), gpytorch.settings.fast_pred_var():# , gpytorch.settings.max_root_decomposition_size(100):
             self.model = model
             self.likelihood = likelihood
 
+    # def find_next_position()
+
     def ask(self, batch_size):
-        print("Asking GP")
+        grid_inputs = griddata(self.inputs, self.targets, (self.meshgrid_points[0], self.meshgrid_points[1]), method='nearest')
+        # plt.imshow(evaluation.loc.max(0)[1].reshape(self.meshgrid_points[0].shape), cmap='terrain', origin='lower')
+        plt.imshow(grid_inputs, cmap='terrain', origin='lower')
+        cb = plt.colorbar() 
+        plt.savefig(f'clustering_outputs.png')
+        cb.remove()
+        print(f"Asking GP... Currently have {len(self.inputs)} inputs and {len(self.targets)} targets.")
         # return 1,1
-        random_positions = np.random.choice(len(self.all_possible_positions),size=1000,replace=False)
-        test_x = self.all_possible_positions[random_positions]
+        if True:#len(self.inputs) > 200:
+            random_positions = np.random.choice(len(self.all_possible_positions),size=2500,replace=False)
+            test_x = self.all_possible_positions[random_positions]
+        else:
+            test_x = self.all_possible_positions
+        print(f"Evaluating model on {len(test_x)} positons...")
         evaluation = self.model(test_x)
         test_x = test_x.detach().cpu().numpy()
-        stds = self.likelihood(evaluation).stddev[:,:].detach().cpu().numpy().sum(axis=1)
+        # stds_all = self.likelihood(evaluation).loc.detach().cpu().numpy()
+        # stds = stds_all.prod(axis=0)
+        print("Sampling...")
+        pred_samples = evaluation.sample(torch.Size((256,))).exp()
+        info = (pred_samples / pred_samples.sum(-2, keepdim=True))
+        # probabilities = info.mean(0).detach().cpu().numpy()
+        stds_all = info.std(0)
+        stds_all /= stds_all.sum(len(stds_all.shape[1:]), keepdim=True)
+        stds_all = stds_all.pow(2)
+        # The stds here actually represent the uncertainty on the proabbility of each label.
+        stds = stds_all.sum(0).detach().cpu().numpy()
+        stds_all = stds_all.detach().cpu().numpy()
+        # probability = stds
         # means = evaluation.mean.detach().cpu().numpy()
-        most_uncertain_indices = np.argsort(stds.flatten())
-        next_positions = list(self.all_possible_positions[most_uncertain_indices[:batch_size]].detach().cpu().numpy())
-        # interp_stds = griddata(test_x, stds, (self.meshgrid_points[0], self.meshgrid_points[1]), method='nearest')
-        # print(f'{means.shape=}')
-        # interp_0 = griddata(test_x, means[:,0], (self.meshgrid_points[0], self.meshgrid_points[1]), method='nearest')
-        # interp_1 = griddata(test_x, means[:,1], (self.meshgrid_points[0], self.meshgrid_points[1]), method='nearest')
-        # interp_2 = griddata(test_x, means[:,2], (self.meshgrid_points[0], self.meshgrid_points[1]), method='nearest')
-        # np.save(f'save/stds/run_{len(self.inputs)}.npy', interp_stds)
-        # np.save(f'save/c0/run_{len(self.inputs)}.npy', interp_0)
-        # np.save(f'save/c1/run_{len(self.inputs)}.npy', interp_1)
-        # np.save(f'save/c2/run_{len(self.inputs)}.npy', interp_2)
-        # np.save(f'save/stds/run_{len(self.inputs)}.npy', np.array([random_positions, stds]).T)
-        # return 1,1
+        # stds = stds**3
+        choice_indices = np.argsort(stds.flatten())
+        num_most_uncertain_to_measure_first = batch_size//2
+        p = stds[:-num_most_uncertain_to_measure_first]
+        p /= p.sum()
+        most_uncertain_indices = choice_indices[-num_most_uncertain_to_measure_first:][::-1]
+        probabalistic_indices = np.random.choice(choice_indices[:-num_most_uncertain_to_measure_first], 
+                                            size=batch_size-num_most_uncertain_to_measure_first,
+                                            replace=False,
+                                            p=p)
+        # most_uncertain_indices = np.argsort(stds.flatten())
+        # next_positions = list(self.all_possible_positions[most_uncertain_indices[-batch_size:]].detach().cpu().numpy())
+        selected_indices =  np.concatenate([most_uncertain_indices, probabalistic_indices])
+        next_positions = list(test_x[selected_indices])
+        print("Next positions selected...")
+        print("Plotting")
+        grid_evaluations = griddata(test_x, evaluation.loc.max(0)[1], (self.meshgrid_points[0], self.meshgrid_points[1]), method='nearest')
+        # plt.imshow(evaluation.loc.max(0)[1].reshape(self.meshgrid_points[0].shape), cmap='terrain', origin='lower')
+        plt.imshow(grid_evaluations, cmap='terrain', origin='lower')
+        cb = plt.colorbar() 
+        plt.savefig(f'predictions.png')
+        cb.remove()
+        grid_stds = griddata(test_x, stds, (self.meshgrid_points[0], self.meshgrid_points[1]), method='nearest')
+        # plt.imshow(stds.reshape(self.meshgrid_points[0].shape), cmap='terrain', origin='lower')
+        plt.imshow(grid_stds, cmap='terrain', origin='lower')
+        cb = plt.colorbar() 
+        plt.savefig(f'stds.png')
+        cb.remove()
+        for i, std in enumerate(stds_all):
+            interp_stds = griddata(test_x, std, (self.meshgrid_points[0], self.meshgrid_points[1]), method='nearest')
+            # plt.scatter(self.meshgrid_points[0], self.meshgrid_points[1], c=interp_stds, cmap='terrain')
+            plt.imshow(interp_stds, cmap='terrain', origin='lower')
+            cb = plt.colorbar()
+            # plt.colorbar()
+            plt.savefig(f'stds_{i:02d}.png')
+            cb.remove()
         return next_positions
 
         # raise NotImplementedError
@@ -355,161 +414,165 @@ class GPytorchAgent(Agent):
     def tell_many(self, x, y):
         raise NotImplementedError
 
-    
-# class MangerAgent(Agent):
-#     def __init__(self, max_count, input_bounds, input_min_spacings, n_independent_keys, dependent_shape, re_manager):
-#         """Load the model, set up the necessary bits"""
-#         self.id = re_manager.id
-#         self.save_positions_path = f'save/ManagerAgent/pos/{self.id:010}.txt'
-#         self.save_flat_targets_path = f'save/ManagerAgent/flat_target/{self.id:010}.txt'
-#         self.dependent_shape = dependent_shape
-#         # self.dependent_shape = (300,300)
-#         self.re_manager = re_manager
-#         self.max_count = max_count
-#         self.count = 0
-#         self.min_count_to_make_decision = 10
-#         self.input_bounds = np.array(input_bounds)
+# https://docs.gpytorch.ai/en/latest/examples/04_Variational_and_Approximate_GPs/Non_Gaussian_Likelihoods.html#Setting-up-the-classification-model
+# Maybe I can use https://docs.gpytorch.ai/en/stable/examples/03_Multitask_Exact_GPs/ModelList_GP_Regression.html
+    # as well? It can have one model for variational classification and another for regressions
+    # Can use regression on dim. reduced data as a 'look for this' kind of spectra.
+
+# First we should just try to get a variational/approximate GP working on the classifacation part
+# This github comment has good info on the softmax likelihood function https://github.com/cornellius-gp/gpytorch/issues/1001
+
+# from gpytorch.models import ApproximateGP
+# from gpytorch.variational import CholeskyVariationalDistribution
+# from gpytorch.variational import VariationalStrategy
+
+# class GPClassificationModel(ApproximateGP):
+#     def __init__(self, train_x):
+#         variational_distribution = CholeskyVariationalDistribution(num_inducing_points=train_x.size(0))
+#         variational_strategy = VariationalStrategy(
+#             self, inducing_points=train_x, variational_distribution=variational_distribution, learn_inducing_locations=True
+#         )
+#         super(GPClassificationModel, self).__init__(variational_strategy)
+#         self.mean_module = gpytorch.means.ConstantMean()
+#         self.covar_module = gpytorch.kernels.ScaleKernel(gpytorch.kernels.RBFKernel())
+
+#     def forward(self, x):
+#         mean_x = self.mean_module(x)
+#         covar_x = self.covar_module(x)
+#         latent_pred = gpytorch.distributions.MultivariateNormal(mean_x, covar_x)
+#         return latent_pred
+
+# class VariationalGPytorchAgent(Agent):
+#     def __init__(self, input_bounds, input_min_spacings, experiment_id):
+#         print("Creating GPytorchAgent")
+#         self.input_bounds = input_bounds
 #         self.input_min_spacings = input_min_spacings
-#         # self.initial_points = []
-#         # The shape below is found by computing (upper-lower)/spacing
-#         # for each bound at the same time and rounding up as an int
-#         # self.decision_space = np.ones(np.ceil(np.diff(input_bounds, axis=1).flatten()/input_min_spacings).astype(int))
-#         self.inputs = np.nan * np.zeros((max_count, n_independent_keys))
-#         self.targets = np.nan * np.zeros((max_count, *self.dependent_shape))
-#         self.flat_targets = np.nan * np.zeros((max_count, np.multiply(*self.dependent_shape)))
+#         self.inputs=None
+#         self.targets=None
+#         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+#         p = [np.arange(low, high, delta) for (low, high), delta in zip(self.input_bounds, self.input_min_spacings)]
+#         self.meshgrid_points = np.meshgrid(*p)
+#         self.all_possible_positions = torch.stack([torch.tensor(arr.flatten(),dtype=torch.float32).to(self.device) for arr in self.meshgrid_points],dim=1)
+#         self.experiment_id = experiment_id
+#         print(f"Total number of possible position is ~{self.all_possible_positions.shape}")
 
-#         # self.pipeline = [PCAAgent(n_components=5), KMeansAgent(n_clusters=4), GPytorchAgent(input_bounds=self.input_bounds, input_min_spacings=self.input_min_spacings)]
-#         self.pipeline = [KMeansAgent(n_clusters=4, id=self.id), GPytorchAgent(input_bounds=self.input_bounds, input_min_spacings=self.input_min_spacings, id=self.id)]
-#         # self.pipeline = [IntensityAgent(), SingleTaskGPAgent(bounds=torch.tensor(input_bounds))]
-
-#     # def update_from_config(self):
-#     #     config = self.read_config()
-#     #     if not self.config_changed:
-#     #         return
-#     #     self.pipeline = 
-
-    
 #     def tell(self, x, y):
-#         print("ManagerAgent was told about new data")
-#         # print(x)
-#         """Tell the Manger about something new"""
-#         if self.count + 1 == self.max_count:
-#             return
-#         # print(f'{y[0].values.shape}')
-#         resized_y = resize(y[0][0].values, self.dependent_shape, anti_aliasing=False)
-#         self.flat_y = resized_y.flatten()
-#         self.inputs[self.count+1] = np.concatenate([i.values for i in x])
-#         self.flat_targets[self.count] = self.flat_y
-#         self.targets[self.count] = resized_y
+#         print(f"GPytorchAgent told about new data: {x.shape=}, {y.shape=}")
+#         # return np.ones(self.decicion_space_shape), None
+#         if self.inputs is None:
+#             self.inputs = torch.atleast_2d(torch.tensor(x, device=self.device, dtype=torch.float32))
+#             self.targets = torch.atleast_1d(torch.tensor(y, device=self.device, dtype=torch.int32))
+#         else:
+#             self.inputs = torch.cat([self.inputs, torch.atleast_2d(torch.tensor(x, device=self.device, dtype=torch.float32))], dim=0)
+#             self.targets = torch.cat([self.targets, torch.atleast_1d(torch.tensor(y, device=self.device, dtype=torch.int32))], dim=0)
+#             self.inputs.to(self.device)
+#             self.targets.to(self.device)
+#         self.fit()
+#         return x, y
+#         # self.surrogate_model.set_train_data(self.inputs, self.targets, strict=False)
+#         # return dict(independent_variable=x, observable=y, cache_len=len(self.targets))
 
-#         self.x = self.inputs[self.count]
-#         self.y = resized_y
+#     def fit(self):# model, likelihood, train_x, train_y):
+#         print("Fitting GP")
+#         train_x = self.inputs
+#         train_y = self.targets
 
+#         # likelihood = gpytorch.likelihoods.MultitaskGaussianLikelihood(num_tasks=train_y.shape[1])
+#         # model = MultitaskGPModel(train_x, train_y, likelihood)
+#         # likelihood = DirichletClassificationLikelihood(train_y, learn_additional_noise=True)
+#         # likelihood = DirichletClassificationLikelihood(train_y, learn_additional_noise=True)
+#         # model = DirichletGPModel(train_x, likelihood.transformed_targets, likelihood, num_classes=likelihood.num_classes)
+#         model = GPClassificationModel(train_x)
+#         # I cannot use Bernoulli likelihood because I have more than 2 classes. Softmax seems most appropriate
+#         likelihood = gpytorch.likelihoods.SoftmaxLikelihood()
+
+#         model.to(self.device)
+#         likelihood.to(self.device)
+
+#         # Find optimal model hyperparameters
+#         model.train()
+#         likelihood.train()
+
+#         # Use the adam optimizer
+#         optimizer = torch.optim.Adam(model.parameters(), lr=0.1)  # Includes GaussianLikelihood parameters
+
+#         # "Loss" for GPs - the marginal log likelihood
+#         # mll = gpytorch.mlls.ExactMarginalLogLikelihood(likelihood, model)
+#         mll = gpytorch.mlls.VariationalELBO(likelihood, model, train_y.numel())
         
-#         # plt.imshow(resized_y, origin='lower')
-#         # plt.savefig(f'save/imgs/img_{self.count:03}.png')
-#         # np.save(f'save/raw/raw_{self.count:03}.npy', resized_y)
+#         training_iterations = 50
+#         print("Training GP")
+#         for i in range(training_iterations):
+#         # iterator = tqdm.tqdm(range(training_iterations))
+#         # for i in iterator:
+#             optimizer.zero_grad()
+#             output = model(train_x)
+#             loss = -mll(output, train_y)
+#             loss.backward()
+#             print('Iter %d/%d - Loss: %.3f' % (i + 1, training_iterations, loss.item()))
+#             optimizer.step()
 
-#         self.count += 1
+#         model.eval()
+#         likelihood.eval()
 
-#         if self.count < self.min_count_to_make_decision:
-#             return
+#         with torch.no_grad(), gpytorch.settings.fast_pred_var(), gpytorch.settings.max_root_decomposition_size(100):
+#             self.model = model
+#             self.likelihood = likelihood
 
-#         # if self.count < self.n_count_before_thinking:
-#         #     return
-        
-#         self.update_decision_space()
-        
-#     def tell_many(self, xs, ys):
-#         """The adaptive plan uses the tell_many method by default, just pass it along."""
-#         self.tell(xs,ys)
+#     # def find_next_position()
 
-#     def is_already_measured(self, pos):
-#         return (np.less(np.abs(np.array(pos) - self.inputs[:self.count]), self.input_min_spacings)).all()
+#     def ask(self, batch_size):
+#         print("Asking GP")
+#         # return 1,1
+#         # random_positions = np.random.choice(len(self.all_possible_positions),size=2500,replace=False)
+#         # test_x = self.all_possible_positions[random_positions]
+#         test_x = self.all_possible_positions
+#         print(f"Evaluating model on {len(test_x)} positons...")
+#         evaluation = self.model(test_x)
+#         test_x = test_x.detach().cpu().numpy()
+#         # stds_all = self.likelihood(evaluation).loc.detach().cpu().numpy()
+#         # stds = stds_all.prod(axis=0)
+#         print("Sampling...")
+#         pred_samples = evaluation.sample(torch.Size((64,))).exp()
+#         info = (pred_samples / pred_samples.sum(-2, keepdim=True))
+#         # probabilities = info.mean(0).detach().cpu().numpy()
+#         stds_all = info.std(0).pow(3)
+#         # The stds here actually represent the uncertainty on the proabbility of each label.
+#         stds = stds_all.sum(0).detach().cpu().numpy()
+#         stds_all = stds_all.detach().cpu().numpy()
+#         # probability = stds
+#         # means = evaluation.mean.detach().cpu().numpy()
+#         # stds = stds**3
+#         selected_indices = np.random.choice(len(test_x), size=batch_size, replace=False, p=stds/np.sum(stds))
+#         # selected_indices = np.argsort(stds.flatten())[-batch_size:][::-1]
+#         # most_uncertain_indices = np.argsort(stds.flatten())
+#         # next_positions = list(self.all_possible_positions[most_uncertain_indices[-batch_size:]].detach().cpu().numpy())
+#         next_positions = list(test_x[selected_indices])
+#         print("Next positions selected...")
+#         print("Plotting")
+#         grid_evaluations = griddata(test_x, evaluation.loc.max(0)[1], (self.meshgrid_points[0], self.meshgrid_points[1]), method='nearest')
+#         # plt.imshow(evaluation.loc.max(0)[1].reshape(self.meshgrid_points[0].shape), cmap='terrain', origin='lower')
+#         plt.imshow(grid_evaluations, cmap='terrain', origin='lower')
+#         cb = plt.colorbar() 
+#         plt.savefig(f'predictions.png')
+#         cb.remove()
+#         grid_stds = griddata(test_x, stds, (self.meshgrid_points[0], self.meshgrid_points[1]), method='nearest')
+#         # plt.imshow(stds.reshape(self.meshgrid_points[0].shape), cmap='terrain', origin='lower')
+#         plt.imshow(grid_stds, cmap='terrain', origin='lower')
+#         cb = plt.colorbar() 
+#         plt.savefig(f'stds.png')
+#         cb.remove()
+#         for i, std in enumerate(stds_all):
+#             interp_stds = griddata(test_x, std, (self.meshgrid_points[0], self.meshgrid_points[1]), method='nearest')
+#             # plt.scatter(self.meshgrid_points[0], self.meshgrid_points[1], c=interp_stds, cmap='terrain')
+#             plt.imshow(interp_stds, cmap='terrain', origin='lower')
+#             cb = plt.colorbar()
+#             # plt.colorbar()
+#             plt.savefig(f'stds_{i:02d}.png')
+#             cb.remove()
+#         return next_positions
 
-#     def get_random_position(self):
-#         if self.count == 0:
-#             return [np.random.uniform(low,high) for low, high in self.input_bounds] 
-
-#         allowed_random_attempts = 500
-#         for i in range(allowed_random_attempts):
-#             random_position = [np.random.uniform(low,high) for low, high in self.input_bounds] 
-#             print(f"Positions Measured So Far {self.count}:")
-#             # print(self.inputs[:self.count])
-#             print("Next position:")
-#             print(random_position)
-#             already_measured = self.is_already_measured(random_position)
-#             # too_close = 
-#             print("Was it already measured?")
-#             print(already_measured)
-#             if already_measured:
-#                 continue
-#             print(f"Took {i+1} tries to get a valid random coordinate.")
-#             return random_position
-
-#     def ask(self, n):
-#         """Ask the Manager for a new command"""
-#         print("ManagerAgent was asked for a new point")
-#         if n != 1:
-#             raise NotImplementedError
-#         if self.count == self.max_count:
-#             raise ValueError("The Manager has already been told about the maximum number of points.")
-#         if self.re_manager.abort:
-#             raise ValueError("The Manager has been told to abort.")
-        
-#         print("Manager was asked for a point")
-#         if self.count < self.min_count_to_make_decision:
-#             pos = self.get_random_position()
-#             return pos
-
-#         next_point = self.make_decision()
-#         self.next_point = [np.clip(val, high, low) for val, (high, low) in zip(next_point, self.input_bounds)]
-#         print(f"Manager suggests point: {self.next_point}")
-#         return self.next_point
+#         # raise NotImplementedError
     
-#     def update_decision_space(self):
-#         if self.count < self.min_count_to_make_decision:
-#             return 
-#         x, y = self.pipeline[0].tell(self.inputs[1:self.count], self.flat_targets[:self.count-1])
-#         # print("--"*20)
-#         # print(x)
-#         # print("--"*20)
-#         # print(y)
-#         # print("--"*20)
-#         for node in self.pipeline[1:]:
-#             x, y = node.tell(x,y)
-#             # print("--"*20)
-#             # print(x)
-#             # print("--"*20)
-#             # print(y)
-#             # print("--"*20)
-#         # self.save_info()
-#         # labels = self.pipeline[0].labels
-#         # np.save('save/labels.npy', labels)
-#         # np.save('save/positions.npy', self.inputs[:self.count])
-#         # np.save(f'save/pca/pc{self.count}.npy',self.pipeline[0].PCA.components_)
-
-#         # if y is not None:
-#         #     raise ValueError("The final pipeline node should have returned (decision_space, None)... Something is wrong.")
-        
-#         # self.decision_space = x/np.sum(x)
-
-
-#     def make_decision(self):
-#         # flat_p = self.decision_space.flatten()
-#         # i_choice = np.random.choice(np.arange(len(flat_p)), p=flat_p)
-#         # i_choice = np.unravel_index(i_choice, self.decision_space.shape)
-#         # frac_position = np.array(i_choice) / np.array(self.decision_space.shape)
-#         # choice_pos = self.input_bounds[:,0] + frac_position * np.diff(self.input_bounds, axis=1).flatten()
-#         # return choice_pos
-#         # self.get_random_position()
-#         choice_position = self.pipeline[-1].ask(1)
-#         return choice_position
-
-#     def save_info(self):
-#         with open(self.save_positions_path, 'a') as f:
-#                 np.savetxt(f, self.x)
-#         with open(self.save_flat_targets_path, 'a') as f:
-#                 np.savetxt(f, self.flat_y.T)
-#         for node in self.pipeline:
-#             node.save_info()
+#     def tell_many(self, x, y):
+#         raise NotImplementedError

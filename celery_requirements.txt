@@ -6,8 +6,11 @@ celery
 redis
 
 numpy
+matplotlib
 scipy
 scikit-learn
+scikit-image
 gpytorch
+tqdm
 torch
 # torchvision

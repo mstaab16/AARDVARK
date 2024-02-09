@@ -72,7 +72,6 @@ services:
       - ./app:/app
     depends_on:
       - redis
-      - server
     
 
 volumes:

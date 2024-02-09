@@ -27,6 +27,7 @@ class Measurement(Base):
     measured = Column(Boolean, default=False)
     measurement_time = Column(String, default="")
     ai_cycle = Column(Integer, default=None)
+    thubmnail = Column(LargeBinary)
 
     experiment = relationship("Experiment", back_populates="measurements")
     decision = relationship("Decision", back_populates="measurements")
