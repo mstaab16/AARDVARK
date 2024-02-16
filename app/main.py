@@ -1,6 +1,7 @@
 from typing import Union
+import time
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.wsgi import WSGIMiddleware
 
 from maestro_api.maestro_app import maestro_app
@@ -11,6 +12,14 @@ from db.base import Base
 from db.database import engine
 
 app = FastAPI()
+
+
+@app.middleware("http")
+async def add_process_time_header(request: Request, call_next):
+    start_time = time.perf_counter_ns()
+    response = await call_next(request)
+    print(f"RESPONSE TIME: {(time.perf_counter_ns() - start_time)/1e6:.03f} ms")
+    return response
 
 def create_tables():
     Base.metadata.create_all(bind=engine)

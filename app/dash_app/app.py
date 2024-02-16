@@ -277,7 +277,7 @@ app.layout = html.Div([
     Input('experiment-id', 'value'),
     Input('n-clusters', 'value'),
 )
-def update_bar_chart(n, experiment_id, n_clusters):
+def update_scatter_plot(n, experiment_id, n_clusters):
     try:
         db_gen = get_db()
         db = next(db_gen)
@@ -307,14 +307,18 @@ def update_bar_chart(n, experiment_id, n_clusters):
     Input('interval-component', 'n_intervals'),
     Input('experiment-id', 'value'),
 )
-def update_bar_chart(n, experiment_id):
+def update_data_image(n, experiment_id):
     try:
         db_gen = get_db()
         db = next(db_gen)
-        data, data_info = db.query(Data.data, Data.data_info).filter(Data.experiment_id == experiment_id, Data.fieldname == "Fixed_Spectra0").order_by(Data.measurement_id.desc()).first()
+        data, data_info = db.query(Data.data, Data.data_info).filter(Data.experiment_id == experiment_id, Data.fieldname == "Fixed_Spectra5").order_by(Data.measurement_id.desc()).first()
+        # print("DASH SEES Data: " , data)
         data_info = json.loads(data_info)
-        data =  base64.decodebytes(data)
-        data = np.frombuffer(data, dtype=np.int32).reshape(*data_info['dimensions'])
+        # data =  base64.decodebytes(data)
+        # print("Dash sees: ", data)
+        data = np.frombuffer(data, dtype=np.int32).reshape(*data_info['dimensions'], order='F')
+        # print("numpy read data: ", data)
+        # data = np.frombuffer(data, dtype=np.int32).reshape(*data_info['dimensions'])
         fig = px.imshow(data.T, origin='lower')
     except Exception as e:
         print(e)

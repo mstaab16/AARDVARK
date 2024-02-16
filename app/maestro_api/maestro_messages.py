@@ -131,13 +131,15 @@ class MaestroLVDataMessage(BaseModel):
 ########################################################################################
 class MaestroLVCloseMessage(BaseModel):
     current_data_cycle: int = Field(default=0, alias='current data cycle')
+    current_ai_cycle: int = Field(default=0, alias='current AI cycle')
     method: str = "closing"
 
     class Config:
         populate_by_name = True
 
 class MaestroLVAbortMessage(BaseModel):
-    current_data_cycle: int = Field(default=0, alias='current data cycle')
+    # current_data_cycle: int = Field(default=0, alias='current data cycle')
+    # current_ai_cycle: int = Field(default=0, alias='current AI cycle')
     method: str = "abort"
 
     class Config:

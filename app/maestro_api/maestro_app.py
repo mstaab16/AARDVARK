@@ -1,4 +1,4 @@
-from fastapi import FastAPI, Depends, BackgroundTasks
+from fastapi import FastAPI, Depends, BackgroundTasks, Body, Request
 
 from . import maestro_messages as mm
 # import celery_workers.tasks as tasks
@@ -17,6 +17,7 @@ import numpy as np
 import base64
 import pickle
 from skimage.transform import resize
+import time
 
 maestro_app = FastAPI()
 
@@ -24,6 +25,7 @@ maestro_app = FastAPI()
 @maestro_app.get("/test")
 def get_health_check():
     return mm.MaestroLVResponseOK()
+
 
 @maestro_app.post("/test")
 def post_health_check(message: mm.MaestroLVResponseOK):
@@ -66,27 +68,34 @@ def process_data(data: mm.MaestroLVDataMessage, db: Session):
     #     # db.update()
     current_measurement.ai_cycle = data.message.current_AI_cycle
     for fd in data.fits_descriptors:
+        print(f"Recieved Data with field name: {fd.fieldname}")
+        if data.message.method == "fake_labview":
+            print('Decoding data first...')
+            dataset = base64.decodebytes(fd.Data)
+            # print(dataset)
+        else:
+            dataset = fd.Data
         fd_without_data = dict(fd)
         del fd_without_data["Data"]
-        
+        # print("SAVING DATA: ", fd.Data)
         new_data = Data(
             experiment_id = experiment_id,
             measurement_id = current_measurement.measurement_id,
             message = data.message.model_dump_json(),
             fieldname = fd.fieldname,
             data_cycle = data.message.current_data_cycle,
-            data = fd.Data,
+            data = dataset,
             data_info = json.dumps(fd_without_data),
         )
         db.add(new_data)
 
-        if fd.fieldname == 'Fixed_Spectrum0':
-            image = np.frombuffer(base64.decodebytes(fd.Data), dtype=np.int32).reshape(128,128)
-            thumbnail = resize(image, (64,64), anti_aliasing=True)
-            # thumbnail /= np.max(thumbnail)
-            # thumbnail *= 1e9
-            # thumbnail = thumbnail.astype(np.int32)
-            current_measurement.thumbnail = pickle.dumps(thumbnail)
+        # if fd.fieldname == 'Fixed_Spectra5':
+        #     image = np.frombuffer(base64.decodebytes(fd.Data), dtype=np.int32).reshape(128,128)
+        #     thumbnail = resize(image, (64,64), anti_aliasing=True)
+        #     # thumbnail /= np.max(thumbnail)
+        #     # thumbnail *= 1e9
+        #     # thumbnail = thumbnail.astype(np.int32)
+        #     current_measurement.thumbnail = pickle.dumps(thumbnail)
 
     db.commit()
     # if this is the last data cycle, mark measurement as measured
@@ -95,7 +104,11 @@ def process_data(data: mm.MaestroLVDataMessage, db: Session):
     #     db.commit()
 
 @maestro_app.post("/data")
-def data(data: mm.MaestroLVDataMessage, background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
+def data(data: mm.MaestroLVDataMessage, background_tasks: BackgroundTasks=None, db: Session = Depends(get_db)):
+# def data(body: dict = Body(...), background_tasks: BackgroundTasks=None, db: Session = Depends(get_db)):
+    # print(body)
+    # data = mm.MaestroLVDataMessage(**body)
+    # print(data.keys())
     # TODO: Need to make LabView send over the experiment id so we can have multiple experiments at onece
     # for now we will just use the most recent experiment (biggest id)
     # Send data to background process for processing and return
@@ -104,6 +117,7 @@ def data(data: mm.MaestroLVDataMessage, background_tasks: BackgroundTasks, db: S
 
 @maestro_app.post("/request_next_position")
 async def next_position(pos_req: mm.MaestroLVPositionRequest, db: Session = Depends(get_db)) -> mm.MaestroLVPositionResponse:
+    start = time.perf_counter()
     print("*"*10 + "TRYING TO GET A NEW POSITION" + "*"*10)
     # Get the next position from the database
     experiment = db.query(Experiment).order_by(Experiment.experiment_id.desc()).first()
@@ -128,7 +142,7 @@ async def next_position(pos_req: mm.MaestroLVPositionRequest, db: Session = Depe
                 positions=[mm.MotorPosition(axis_name=axis_name, value=next_measurement.positions[axis_name])
                             for axis_name in next_measurement.positions]
             )
-    print("*"*10 + "RETURNING POSITION" + "*"*10)
+    print("*"*10 + f"RETURNING POSITION AFTER {(time.perf_counter() - start)*1000:.02f}ms" + "*"*10)
     # print("Returning Position....")
     return pos_response
 
@@ -138,6 +152,7 @@ def close(message: mm.MaestroLVCloseMessage, db: Session = Depends(get_db)):
     experiment = db.query(Experiment).order_by(Experiment.experiment_id.desc()).first()
     experiment.active = False
     db.commit()
+    print("+"*10 + "SHOULD BE CLOSING NOW" + "+"*10)
     return mm.MaestroLVResponseOK()
 
 @maestro_app.post("/abort")
@@ -146,6 +161,7 @@ def abort(message: mm.MaestroLVAbortMessage, db: Session = Depends(get_db)):
     experiment = db.query(Experiment).order_by(Experiment.experiment_id.desc()).first()
     experiment.active = False
     db.commit()
+    print("+"*10 + "SHOULD BE ABORTING NOW" + "+"*10)
     return mm.MaestroLVResponseOK()
 
 ########################################################################################

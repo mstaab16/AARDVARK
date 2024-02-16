@@ -8,6 +8,7 @@ from gpytorch.likelihoods import DirichletClassificationLikelihood
 from gpytorch.means import ConstantMean
 from gpytorch.kernels import ScaleKernel, RBFKernel
 from scipy.ndimage import gaussian_filter
+from scipy.optimize import minimize, basinhopping
 import tqdm
 
 import matplotlib.pyplot as plt
@@ -272,11 +273,14 @@ class GPytorchAgent(Agent):
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         print("THE DEVICE BEING USED IS: ", self.device)
         # p = [np.arange(low, high, delta) for (low, high), delta in zip(self.input_bounds, self.input_min_spacings)]
-        p = [np.linspace(low, high, 256) for (low, high) in self.input_bounds]
+        p = [np.linspace(low, high, 128) for (low, high) in self.input_bounds]
         self.meshgrid_points = np.meshgrid(*p)
-        self.all_possible_positions = torch.stack([torch.tensor(arr.flatten(),dtype=torch.float32).to(self.device) for arr in self.meshgrid_points],dim=1)
+        self.plotting_positions = torch.stack([torch.tensor(arr.flatten(),dtype=torch.float32).to(self.device) for arr in self.meshgrid_points],dim=1)
+        p = [np.linspace(low, high, 4) for (low, high) in self.input_bounds]
+        self.scipy_meshgrid = np.meshgrid(*p)
+        self.optimize_positions = torch.stack([torch.tensor(arr.flatten(),dtype=torch.float32).to(self.device) for arr in self.scipy_meshgrid],dim=1)
         self.experiment_id = experiment_id
-        print(f"Total number of possible position is ~{self.all_possible_positions.shape}")
+        # print(f"Total number of possible position is ~{self.all_possible_positions.shape}")
 
     def tell(self, x, y):
         print(f"GPytorchAgent told about new data: {x.shape=}, {y.shape=}")
@@ -341,19 +345,29 @@ class GPytorchAgent(Agent):
     # def find_next_position()
 
     def ask(self, batch_size):
-        grid_inputs = griddata(self.inputs, self.targets, (self.meshgrid_points[0], self.meshgrid_points[1]), method='nearest')
-        # plt.imshow(evaluation.loc.max(0)[1].reshape(self.meshgrid_points[0].shape), cmap='terrain', origin='lower')
-        plt.imshow(grid_inputs, cmap='terrain', origin='lower')
-        cb = plt.colorbar() 
-        plt.savefig(f'clustering_outputs.png')
-        cb.remove()
-        print(f"Asking GP... Currently have {len(self.inputs)} inputs and {len(self.targets)} targets.")
-        # return 1,1
-        if True:#len(self.inputs) > 200:
-            random_positions = np.random.choice(len(self.all_possible_positions),size=2500,replace=False)
-            test_x = self.all_possible_positions[random_positions]
-        else:
-            test_x = self.all_possible_positions
+
+        # fit = basinhopping(minimize_func, np.array([0.5, 0.5]), minimizer_kwargs=dict(bounds=self.input_bounds, method='L-BFGS-B', args=(self.model, self.device)))
+        # score = fit.fun
+        # local_maxima = np.array([fit.x])
+        # print(f"Most uncertain found: {fit.x} | {score}")
+        # local_maxima = []
+        # scores = []
+        # for x0 in self.optimize_positions:
+        #     # print(f"{local_maxima=}")
+        #     fit = minimize(minimize_func, x0=x0.cpu(), args=(self.model, self.device), bounds=self.input_bounds, method='L-BFGS-B', options=dict(eps=.5))
+        #     # print("Minimize returned: ", fit)
+        #     x = fit.x
+        #     # print(x0)
+        #     # print(x)
+        #     x = [(x[i]//self.input_min_spacings[i])*self.input_min_spacings[i] for i in range(2)]
+        #     if x not in local_maxima:
+        #         local_maxima.append(x)
+        #         scores.append(fit.fun)
+        # local_maxima = np.array(local_maxima)
+        # local_maxima = local_maxima[np.argsort(scores)]
+        # print(f"Asking GP... Currently have {len(self.inputs)} inputs and {len(self.targets)} targets.")
+        # # return 1,1
+        test_x = self.plotting_positions
         print(f"Evaluating model on {len(test_x)} positons...")
         evaluation = self.model(test_x)
         test_x = test_x.detach().cpu().numpy()
@@ -363,17 +377,17 @@ class GPytorchAgent(Agent):
         pred_samples = evaluation.sample(torch.Size((256,))).exp()
         info = (pred_samples / pred_samples.sum(-2, keepdim=True))
         # probabilities = info.mean(0).detach().cpu().numpy()
-        stds_all = info.std(0)
-        stds_all /= stds_all.sum(len(stds_all.shape[1:]), keepdim=True)
-        stds_all = stds_all.pow(2)
-        # The stds here actually represent the uncertainty on the proabbility of each label.
-        stds = stds_all.sum(0).detach().cpu().numpy()
-        stds_all = stds_all.detach().cpu().numpy()
-        # probability = stds
-        # means = evaluation.mean.detach().cpu().numpy()
-        # stds = stds**3
+        stds = info.std(0).sum(0).detach().cpu().numpy()
+        # stds_all /= stds_all.sum(len(stds_all.shape[1:]), keepdim=True)
+        # stds_all = stds_all.pow(2)
+        # # The stds here actually represent the uncertainty on the proabbility of each label.
+        # stds = stds_all.sum(0).detach().cpu().numpy()
+        # # stds_all = stds_all.detach().cpu().numpy()
+        # # probability = stds
+        # # means = evaluation.mean.detach().cpu().numpy()
+        # # stds = stds**3
         choice_indices = np.argsort(stds.flatten())
-        num_most_uncertain_to_measure_first = batch_size//2
+        num_most_uncertain_to_measure_first = 1 # batch_size // 2
         p = stds[:-num_most_uncertain_to_measure_first]
         p /= p.sum()
         most_uncertain_indices = choice_indices[-num_most_uncertain_to_measure_first:][::-1]
@@ -387,32 +401,55 @@ class GPytorchAgent(Agent):
         next_positions = list(test_x[selected_indices])
         print("Next positions selected...")
         print("Plotting")
-        grid_evaluations = griddata(test_x, evaluation.loc.max(0)[1], (self.meshgrid_points[0], self.meshgrid_points[1]), method='nearest')
+        # # grid_inputs = griddata(self.inputs.cpu(), self.targets.cpu(), (self.meshgrid_points[0], self.meshgrid_points[1]), method='nearest')
+        # # # plt.imshow(evaluation.loc.max(0)[1].reshape(self.meshgrid_points[0].shape), cmap='terrain', origin='lower')
+        # # plt.imshow(grid_inputs, cmap='terrain', origin='lower')
+        # # cb = plt.colorbar() 
+        # # plt.savefig(f'clustering_outputs.png')
+        # # cb.remove()
+        grid_evaluations = griddata(test_x, evaluation.loc.max(0)[1].cpu(), (self.meshgrid_points[0], self.meshgrid_points[1]), method='nearest')
         # plt.imshow(evaluation.loc.max(0)[1].reshape(self.meshgrid_points[0].shape), cmap='terrain', origin='lower')
-        plt.imshow(grid_evaluations, cmap='terrain', origin='lower')
+        plt.imshow(grid_evaluations, cmap='terrain', origin='lower', extent=np.ravel(self.input_bounds))
         cb = plt.colorbar() 
         plt.savefig(f'predictions.png')
-        cb.remove()
+        plt.clf()
+        # cb.remove()
         grid_stds = griddata(test_x, stds, (self.meshgrid_points[0], self.meshgrid_points[1]), method='nearest')
         # plt.imshow(stds.reshape(self.meshgrid_points[0].shape), cmap='terrain', origin='lower')
-        plt.imshow(grid_stds, cmap='terrain', origin='lower')
+        # plt.scatter(*self.optimize_positions.cpu().T, marker='x', color='r')
+        # plt.scatter(*local_maxima.T, marker='o', color='k')
+        plt.imshow(grid_stds, cmap='terrain', origin='lower', extent=np.ravel(self.input_bounds))
         cb = plt.colorbar() 
         plt.savefig(f'stds.png')
-        cb.remove()
-        for i, std in enumerate(stds_all):
-            interp_stds = griddata(test_x, std, (self.meshgrid_points[0], self.meshgrid_points[1]), method='nearest')
-            # plt.scatter(self.meshgrid_points[0], self.meshgrid_points[1], c=interp_stds, cmap='terrain')
-            plt.imshow(interp_stds, cmap='terrain', origin='lower')
-            cb = plt.colorbar()
-            # plt.colorbar()
-            plt.savefig(f'stds_{i:02d}.png')
-            cb.remove()
+        plt.clf()
+        # cb.remove()
+        # # for i, std in enumerate(stds_all):
+        # #     interp_stds = griddata(test_x, std, (self.meshgrid_points[0], self.meshgrid_points[1]), method='nearest')
+        # #     # plt.scatter(self.meshgrid_points[0], self.meshgrid_points[1], c=interp_stds, cmap='terrain')
+        # #     plt.imshow(interp_stds, cmap='terrain', origin='lower')
+        # #     cb = plt.colorbar()
+        # #     # plt.colorbar()
+        # #     plt.savefig(f'stds_{i:02d}.png')
+        # #     cb.remove()
         return next_positions
 
-        # raise NotImplementedError
+
     
     def tell_many(self, x, y):
         raise NotImplementedError
+
+def minimize_func(x, model, device):
+    test_x = torch.unsqueeze(torch.tensor(x, device=device, dtype=torch.float32), 0)
+    evaluation = model(test_x)
+    pred_samples = evaluation.sample(torch.Size((256,))).exp()
+    info = (pred_samples / pred_samples.sum(-2, keepdim=True))
+    stds = info.std(0).sum(0).detach().cpu().numpy()
+    # print(stds_all)
+    # stds_all /= stds_all.sum(len(stds_all.shape[1:]), keepdim=True)
+    # stds_all = stds_all.pow(2)
+    # stds = stds_all.sum(0).detach().cpu().numpy()
+    # print(f"{x}: {-stds[0]}")
+    return -stds[0]
 
 # https://docs.gpytorch.ai/en/latest/examples/04_Variational_and_Approximate_GPs/Non_Gaussian_Likelihoods.html#Setting-up-the-classification-model
 # Maybe I can use https://docs.gpytorch.ai/en/stable/examples/03_Multitask_Exact_GPs/ModelList_GP_Regression.html

@@ -11,8 +11,8 @@ class FakeVoronoiCrystal:
         # np.random.seed(40)
         self.num_angles = num_angles
         self.num_energies = num_energies
-        num_crystalllites = 5
-        vor_points = np.random.uniform(-8,8,(num_crystalllites,2))
+        num_crystalllites = 3
+        vor_points = np.random.uniform(0,1,(num_crystalllites,2))
         # vor_points = np.array([
         #     [0.2, 0.4],
         #     [0.4, 0.6],

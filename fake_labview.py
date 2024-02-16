@@ -5,19 +5,22 @@ from app.maestro_api.maestro_messages import *
 from fake_crystals import FakeVoronoiCrystal
 import time
 
+import matplotlib.pyplot as plt
+
 class FakeLV:
     def __init__(self):
         self.aardvark_url = "http://127.0.0.1/maestro"
 
         self.current_ai_cycle = 0
         self.current_data_cycle = 0
-        self.max_ai_cycle = 500
-        self.measurement_delay = 0.25
-        self.num_energies = 128
-        self.num_angles = 128
+        self.max_ai_cycle = 400
+        self.measurement_delay = 0.00001
+        self.num_energies = 16
+        self.num_angles = 16
         self.dead_time = 0
         self.start_time = time.perf_counter()
         self.fake_crystal = FakeVoronoiCrystal(num_angles = self.num_angles, num_energies = self.num_energies)
+        self.waiting_times = []
         self.startup()
         self.operation_loop()
 
@@ -36,8 +39,8 @@ class FakeLV:
             #     AIModeparm(device_name="motors::Y", enabled_=True, low=0, high=1, min_step=0.01)
             # ],
             AIModeparms=[
-                AIModeparm(device_name="motors::X", enabled_=True, low=-10, high=10, min_step=0.01),
-                AIModeparm(device_name="motors::Y", enabled_=True, low=-10, high=10, min_step=0.01)
+                AIModeparm(device_name="motors::X", enabled_=True, low=0, high=1, min_step=0.01),
+                AIModeparm(device_name="motors::Y", enabled_=True, low=0, high=1, min_step=0.01)
             ],
             # This is the number of AI cycles to go through
             max_count=self.max_ai_cycle,
@@ -82,8 +85,16 @@ class FakeLV:
             self.send_data()
             self.current_ai_cycle += 1
             self.current_data_cycle = 0
+            plt.clf()
+            plt.plot(self.waiting_times)
+            plt.savefig("waiting_times.png")
             if self.current_ai_cycle >= self.max_ai_cycle:
                 self.send_translator_close()
+                plt.clf()
+                plt.hist(self.waiting_times, bins=50)
+                plt.yscale('log')
+                plt.title(f"Total dead time: {self.dead_time/60:.02f}min")
+                plt.savefig("waiting_times_hist.png")
                 break
 
     def send_translator_close(self):
@@ -92,7 +103,11 @@ class FakeLV:
 
     def request_position(self):
         position_request = MaestroLVPositionRequest(current_AI_cycle=self.current_ai_cycle)
+        start = time.perf_counter()
         response = self.post_to_aardvark("/request_next_position/", position_request)
+        position_request_time = (time.perf_counter()-start)*1000
+        self.waiting_times.append(position_request_time)
+        print(f"LV: Position request took {position_request_time:.02f}ms round trip.")
         self.position = MaestroLVPositionResponse(**response)
 
     def send_data(self):
@@ -100,9 +115,11 @@ class FakeLV:
         time.sleep(self.measurement_delay)
         data = self.generate_data()
         data_bytes = data.tobytes(order='F')
+        # print(data_bytes)
         data_message = DataMessage(
                     current_data_cycle=self.current_data_cycle,
                     current_AI_cycle=self.current_ai_cycle,
+                    method="fake_labview",
                     )
         message = MaestroLVDataMessage(
                 message=data_message,
@@ -146,7 +163,7 @@ class FakeLV:
                             "data dimensions": "string",
                             "dataunitname (if not string)": "arb",
                             "dimensions": [*data.shape],
-                            "fieldname": "Fixed_Spectra0",
+                            "fieldname": "Fixed_Spectra5",
                             "numeric type (if not string)": "B:u8",
                             "scaledelta": [25,500],
                             "scaleoffset": [2.6499999999999999112,104],

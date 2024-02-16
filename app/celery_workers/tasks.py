@@ -1,6 +1,7 @@
 import time
 import numpy as np
 import base64
+import json
 
 from sqlalchemy.orm import load_only
 
@@ -35,7 +36,7 @@ class ExperimentWatcher:
         self.y = []
         
         self.pipeline = [
-            agents.KMeansAgent(n_clusters=7, experiment_id=self.experiment_id), 
+            agents.KMeansAgent(n_clusters=4, experiment_id=self.experiment_id), 
             agents.GPytorchAgent(input_bounds=[[low,high] for low, high in zip(self.motor_lows, self.motor_highs)], input_min_spacings=self.motor_min_steps, experiment_id=self.experiment_id)
             ]
 
@@ -44,7 +45,7 @@ class ExperimentWatcher:
 
         
         num_random_measurements = 25
-        num_boundary_measurements = 10
+        num_boundary_measurements = 3
 
         startup_decision = Decision(
             experiment_id = self.experiment_id,
@@ -75,6 +76,9 @@ class ExperimentWatcher:
         # time.sleep(5)
 
         while True:
+            loop_start = time.perf_counter()
+            # Reset loop_end each time because sometimes we will continue the loop early
+            loop_end = time.perf_counter()
             # Check if experiment is still active
             self.experiment = self.db.query(Experiment).get(self.experiment_id)
             if not self.experiment.active:
@@ -82,7 +86,7 @@ class ExperimentWatcher:
                 return
             self.update_data()
             print(self.data_ids)
-            if len(self.data_ids) < 4*num_boundary_measurements + num_random_measurements - 20:
+            if len(self.data_ids) < len(boundary_measurements) + num_random_measurements* 0.75:
                 print("Not enough data to train on")
                 time.sleep(1)
                 continue
@@ -114,9 +118,9 @@ class ExperimentWatcher:
             if len(self.measured_indices) == len(self.all_possible_measurement_indices):
                 print("All measurements have been suggested?!?!?")
                 continue
-            num=25
-            # measurements = self.create_random_measurements(num, decision.decision_id)
-            measurements = self.create_smart_measurements(num, decision.decision_id)
+            num_to_suggest=25
+            # measurements = self.create_random_measurements(num_to_suggest, decision.decision_id)
+            measurements = self.create_smart_measurements(num_to_suggest, decision.decision_id)
             # non_duplicates = []
             # for measurement in measurements:
             #     idx = position_to_index(np.array([list(measurement.positions.values())]), self.motor_lows, self.motor_min_steps, self.max_positions_per_motor)
@@ -133,19 +137,31 @@ class ExperimentWatcher:
 
             # Commit the changes
             self.db.commit()
+            num_suggested = len(measurements)
+            loop_end = time.perf_counter()
+            loop_time = (loop_start - loop_end)
+            suggestions_per_sec = num_suggested/loop_time
+            print("Loop time: {loop_time:.02f}\tNum suggested: {num_suggested:.1f}\tSuggestions per sec: {suggestions_per_sec:.1f}")
+            if suggestions_per_sec > 10 or suggestions_per_sec < 5:
+                num_to_suggest = 7.5 * suggestions_per_sec * loop_time
+                print(f"UPDATING NUM TO SUGGEST TO: {num_to_suggest}")
+
 
     def update_data(self):
         print("*"*20)
         print('Getting all data')
         start = time.perf_counter_ns()
-        query = self.db.query(Measurement.positions, Data.data_id, Data.data).join(Measurement.data)\
+        query = self.db.query(Measurement.positions, Data.data_id, Data.data, Data.data_info).join(Measurement.data)\
                 .filter(~Data.data_id.in_(self.data_ids))\
-                .filter(Measurement.experiment_id == self.experiment_id, Data.fieldname == 'Fixed_Spectra0').all()
-        for pos, data_id, data in query:
+                .filter(Measurement.experiment_id == self.experiment_id, Data.fieldname == 'Fixed_Spectra5').all()
+        
+        # data, data_info = db.query(Data.data, Data.data_info).filter(Data.experiment_id == experiment_id, Data.fieldname == "Fixed_Spectra5").order_by(Data.measurement_id.desc()).first()
+        for pos, data_id, data, data_info in query:
+            data_info = json.loads(data_info)
             self.data_ids.append(data_id)
             self.data_indices.append(position_to_index(np.array([list(pos.values())]), self.motor_lows, self.motor_min_steps, self.max_positions_per_motor))
             self.x.append(np.array(list(pos.values())))
-            self.y.append(np.frombuffer(base64.decodebytes(data), dtype=np.int32).reshape(128,128).flatten())
+            self.y.append(np.frombuffer(data, dtype=np.int32).reshape(*data_info['dimensions'], order='F').flatten())
         # positions_and_ids = self.db.query(Measurement.positions, Data.data_id).join(Measurement.data).filter(Measurement.experiment_id == self.experiment_id, Data.fieldname == 'Fixed_Spectra0').all()
         # if len(positions_and_ids) == 0:
         #     print("No data found")
@@ -171,7 +187,7 @@ class ExperimentWatcher:
         # # self.x.update({idx: np.array(list(pos.values())) for idx, _, pos in new_stuff})
         # # self.y.update({idx: d for idx, d, _ in new_stuff})
 
-        print(f'Updated with {len(query)} new datasets in {(time.perf_counter_ns() - start) / 1e9} seconds.')
+        print(f'Updated with {len(query)} new datasets in {(time.perf_counter_ns() - start) / 1e6:.02} ms.')
 
     def create_random_measurements(self, num_measurements, decision_id):
         decision = self.db.query(Decision).get(decision_id)
