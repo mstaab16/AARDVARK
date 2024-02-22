@@ -36,14 +36,13 @@ class ExperimentWatcher:
         self.y = []
         
         self.pipeline = [
+            agents.PCAAgent(n_components=.95),
             agents.KMeansAgent(n_clusters=4, experiment_id=self.experiment_id), 
             agents.GPytorchAgent(input_bounds=[[low,high] for low, high in zip(self.motor_lows, self.motor_highs)], input_min_spacings=self.motor_min_steps, experiment_id=self.experiment_id)
             ]
 
     def run(self):
         # Create the first decision
-
-        
         num_random_measurements = 25
         num_boundary_measurements = 3
 
@@ -84,8 +83,7 @@ class ExperimentWatcher:
             if not self.experiment.active:
                 print("Experiment is no longer active. Shutting down...")
                 return
-            self.update_data()
-            print(self.data_ids)
+            new_measurements = self.update_data()
             if len(self.data_ids) < len(boundary_measurements) + num_random_measurements* 0.75:
                 print("Not enough data to train on")
                 time.sleep(1)
@@ -137,13 +135,13 @@ class ExperimentWatcher:
 
             # Commit the changes
             self.db.commit()
-            num_suggested = len(measurements)
             loop_end = time.perf_counter()
-            loop_time = (loop_start - loop_end)
-            suggestions_per_sec = num_suggested/loop_time
-            print("Loop time: {loop_time:.02f}\tNum suggested: {num_suggested:.1f}\tSuggestions per sec: {suggestions_per_sec:.1f}")
+            loop_time = (loop_end - loop_start)
+            suggestions_per_sec = new_measurements/loop_time
+            print(f"Loop time: {loop_time:.02f}\tNum measured: {new_measurements:.1f}\tSuggestions per sec: {suggestions_per_sec:.1f}")
             if suggestions_per_sec > 10 or suggestions_per_sec < 5:
-                num_to_suggest = 7.5 * suggestions_per_sec * loop_time
+                num_to_suggest = 2 * suggestions_per_sec * loop_time
+                num_to_suggest = max(num_to_suggest, 5)
                 print(f"UPDATING NUM TO SUGGEST TO: {num_to_suggest}")
 
 
@@ -188,6 +186,7 @@ class ExperimentWatcher:
         # # self.y.update({idx: d for idx, d, _ in new_stuff})
 
         print(f'Updated with {len(query)} new datasets in {(time.perf_counter_ns() - start) / 1e6:.02} ms.')
+        return len(query)
 
     def create_random_measurements(self, num_measurements, decision_id):
         decision = self.db.query(Decision).get(decision_id)

@@ -9,17 +9,20 @@ import matplotlib.pyplot as plt
 
 class FakeLV:
     def __init__(self):
-        self.aardvark_url = "http://127.0.0.1/maestro"
+        self.aardvark_url = "http://einstein.dhcp.lbl.gov/maestro"
 
         self.current_ai_cycle = 0
         self.current_data_cycle = 0
-        self.max_ai_cycle = 400
+        self.max_ai_cycle = 200
         self.measurement_delay = 0.00001
-        self.num_energies = 16
-        self.num_angles = 16
+        self.num_energies = 1024
+        self.num_angles = 1024
         self.dead_time = 0
         self.start_time = time.perf_counter()
-        self.fake_crystal = FakeVoronoiCrystal(num_angles = self.num_angles, num_energies = self.num_energies)
+        self.crystal_bounds = [[-1,1], [-1,1]]
+        self.min_steps = [0.01, 0.01]
+        self.fake_crystal = FakeVoronoiCrystal(num_crystallites=4, num_angles = self.num_angles, num_energies = self.num_energies,
+                                               bounds=self.crystal_bounds, min_steps=self.min_steps)
         self.waiting_times = []
         self.startup()
         self.operation_loop()
@@ -39,8 +42,8 @@ class FakeLV:
             #     AIModeparm(device_name="motors::Y", enabled_=True, low=0, high=1, min_step=0.01)
             # ],
             AIModeparms=[
-                AIModeparm(device_name="motors::X", enabled_=True, low=0, high=1, min_step=0.01),
-                AIModeparm(device_name="motors::Y", enabled_=True, low=0, high=1, min_step=0.01)
+                AIModeparm(device_name="motors::X", enabled_=True, low=self.crystal_bounds[0][0], high=self.crystal_bounds[0][1], min_step=self.min_steps[0]),
+                AIModeparm(device_name="motors::Y", enabled_=True, low=self.crystal_bounds[1][0], high=self.crystal_bounds[1][1], min_step=self.min_steps[1])
             ],
             # This is the number of AI cycles to go through
             max_count=self.max_ai_cycle,

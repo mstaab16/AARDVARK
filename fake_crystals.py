@@ -7,24 +7,29 @@ from time import perf_counter
 
 
 class FakeVoronoiCrystal:
-    def __init__(self, num_angles, num_energies, plot=True):
+    def __init__(self, num_angles, num_energies, bounds, min_steps, num_crystallites, plot=True):
         # np.random.seed(40)
         self.num_angles = num_angles
         self.num_energies = num_energies
-        num_crystalllites = 3
-        vor_points = np.random.uniform(0,1,(num_crystalllites,2))
+        self.num_crystallites = num_crystallites
+        self.min_steps = min_steps
+        self.bounds = bounds
+        vor_points = np.array([
+            np.random.uniform(bounds[0][0], bounds[0][1], num_crystallites),
+            np.random.uniform(bounds[1][0], bounds[1][1], num_crystallites),
+        ]).T
         # vor_points = np.array([
         #     [0.2, 0.4],
         #     [0.4, 0.6],
         #     [0.75, 0.5],
         # ])
-        self.vor_azimuths = np.random.uniform(-180,180, num_crystalllites)
-        self.vor_tilts = np.random.uniform(-15,15, num_crystalllites)
-        self.vor_polars = np.random.uniform(-15,15, num_crystalllites)
-        self.vor_intensities = np.random.uniform(1,1, num_crystalllites)
+        self.vor_azimuths = np.random.uniform(-180,180, num_crystallites)
+        self.vor_tilts = np.random.uniform(-15,15, num_crystallites)
+        self.vor_polars = np.random.uniform(-15,15, num_crystallites)
+        self.vor_intensities = np.random.uniform(1,1, num_crystallites)
         self.vor = Voronoi(vor_points)
-        self.xcoords = np.linspace(-3,3,5000)
-        self.ycoords = np.linspace(-3,3,5000)
+        self.xcoords = np.arange(bounds[0][0], bounds[0][1], min_steps[0])
+        self.ycoords =  np.arange(bounds[1][0], bounds[1][1], min_steps[1])
         self.plot()
 
     def get_label(self, x, y):
@@ -60,35 +65,50 @@ class FakeVoronoiCrystal:
 
     def get_boundaries(self):
         return np.min(self.xcoords), np.max(self.xcoords), np.min(self.ycoords), np.max(self.ycoords)
-
-    def plot(self):
-        # voronoi_plot_2d(self.vor)
-        xs = np.linspace(-10,10,500)
-        ys = np.linspace(-10,10,500)
-        xs, ys = np.meshgrid(xs,ys)
+    
+    def plot_grid(self, shape):
+        print(f"plotting grid: {shape}")
+        xs = np.linspace(self.bounds[0][0], self.bounds[0][1], shape[0])
+        ys = np.linspace(self.bounds[1][0], self.bounds[1][1], shape[1])
+        xs, ys = np.meshgrid(xs, ys)
         labels = np.zeros(xs.shape,dtype=np.int32) * np.nan
         for i, (x, y) in enumerate(zip(xs.flatten(), ys.flatten())):
             i = np.unravel_index(i, xs.shape)
             label = self.get_label(x,y)
-            # print(f"{i} | {x}, {y}: {label}")
             labels[i] = label
             
         # print(labels)
-        plt.imshow(labels, extent=[0,1,0,1], origin='lower', cmap='terrain')
-        plt.xlim(0,1)
-        plt.ylim(0,1)
+        plt.imshow(labels, extent=np.ravel(self.bounds), origin='lower', cmap='terrain')
+        plt.xlim(*self.bounds[0])
+        plt.ylim(*self.bounds[1])
         plt.colorbar()
         # plt.grid(which='both')
+        plt.scatter(*self.vor.points.T, c='r', marker='x')
+        plt.savefig(f"test_{shape[0]}x{shape[1]}.png")
+        plt.clf()
+
+    def plot(self):
+        print("Plotting crystal")
+        xs, ys = np.meshgrid(self.xcoords, self.ycoords)
+        labels = np.zeros(xs.shape,dtype=np.int32) * np.nan
+        for i, (x, y) in enumerate(zip(xs.flatten(), ys.flatten())):
+            i = np.unravel_index(i, xs.shape)
+            label = self.get_label(x,y)
+            labels[i] = label
+            
+        # print(labels)
+        plt.imshow(labels, extent=np.ravel(self.bounds), origin='lower', cmap='terrain')
+        plt.xlim(*self.bounds[0])
+        plt.ylim(*self.bounds[1])
+        plt.colorbar()
+        # plt.grid(which='both')
+        plt.scatter(*self.vor.points.T, c='r', marker='x')
         plt.savefig("test.png")
-        # # plt.show()
-        # fig, axes = plt.subplots(len(self.vor.points)//3, 3, figsize=(8,8))
-        # for ax, (x,y) in zip(axes.ravel(),self.vor.points):
-        #     ax.imshow(self.measure(x,y)[2], cmap='gray_r', origin='lower')
-        #     ax.set_title(f'x={x:.2f}, y={y:.2f}')
-        #     ax.grid(which='both')
-        # fig.tight_layout()
-        # plt.savefig("test.png")
-        # # plt.show()
+        plt.clf()
+        self.plot_grid((10,10))
+        self.plot_grid((20,20))
+        self.plot_grid((50,50))
+        self.plot_grid((100,100))
 
 
 # class FakeGrapheneCrystal:
@@ -154,7 +174,7 @@ def main():
 #     
 #     plt.imshow(spectrum.T, origin='lower', cmap='Greys')
 #     plt.show()
-     vor = FakeVoronoiCrystal(num_angles=128, num_energies=128)
+     vor = FakeVoronoiCrystal(num_crystallites=50, num_angles=128, num_energies=128, bounds=[[-10,10], [-10,10]], min_steps=[0.05, 0.05])
     #  vor.plot()
 #     wse2 = FakeWSe2Crystal()
 #     xmin, xmax, ymin, ymax = wse2.get_boundaries()
