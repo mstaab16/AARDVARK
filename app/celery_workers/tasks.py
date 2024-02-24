@@ -2,6 +2,7 @@ import time
 import numpy as np
 import base64
 import json
+import logging
 
 from sqlalchemy.orm import load_only
 
@@ -224,6 +225,40 @@ class ExperimentWatcher:
 def setup_experiment_watcher(experiment_id):
     experiment_watcher = ExperimentWatcher(experiment_id)
     experiment_watcher.run()
+
+@app.task
+def save_data(msg):
+    data = mm.MaestroLVDataMessage(**msg)
+    db_gen = get_db()
+    db = next(db)
+    experiment_id = db.query(Experiment).order_by(Experiment.experiment_id.desc()).first().experiment_id
+
+    current_measurement = db.query(Measurement).filter(Measurement.experiment_id == experiment_id, Measurement.measured == True).order_by(Measurement.measurement_id.desc()).first()
+
+    current_measurement.ai_cycle = data.message.current_AI_cycle
+    for fd in data.fits_descriptors:
+        logging.info(f"Recieved Data with field name: {fd.fieldname}")
+        if data.message.method == "fake_labview":
+            logging.info('Decoding data first...')
+            dataset = base64.decodebytes(fd.Data)
+            # logging.info(dataset)
+        else:
+            dataset = fd.Data
+        fd_without_data = dict(fd)
+        del fd_without_data["Data"]
+        # logging.info("SAVING DATA: ", fd.Data)
+        new_data = Data(
+            experiment_id = experiment_id,
+            measurement_id = current_measurement.measurement_id,
+            message = data.message.model_dump_json(),
+            fieldname = fd.fieldname,
+            data_cycle = data.message.current_data_cycle,
+            data = dataset,
+            data_info = json.dumps(fd_without_data),
+        )
+        db.add(new_data)
+
+    db.commit()
 
 def position_to_index(positions, motor_lows, motor_min_steps, max_positions_per_motor):
     indices = np.floor((positions - motor_lows) / motor_min_steps).astype(np.int_).T

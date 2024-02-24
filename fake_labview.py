@@ -122,7 +122,7 @@ class FakeLV:
         data_message = DataMessage(
                     current_data_cycle=self.current_data_cycle,
                     current_AI_cycle=self.current_ai_cycle,
-                    method="fake_labview",
+                    method="fake_labview newdata",
                     )
         message = MaestroLVDataMessage(
                 message=data_message,

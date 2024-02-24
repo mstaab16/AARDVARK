@@ -74,7 +74,7 @@ class MaestroLVStartupMessage(BaseModel):
     AI_Controller: str = Field(..., alias='AI Controller')
     AIModeparms: List[AIModeparm]
     max_count: int = Field(..., alias='max #')
-    method: str
+    method: str = "initialize"
     scan_descriptors: ScanDescriptors = Field(..., alias='scan descriptors')
 
     class Config:

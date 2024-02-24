@@ -2,6 +2,9 @@ fastapi
 pydantic
 pydantic-settings
 uvicorn
+
+pyzmq
+
 sqlalchemy
 psycopg2-binary
 celery
