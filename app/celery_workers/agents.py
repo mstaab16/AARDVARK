@@ -455,6 +455,7 @@ class GPytorchAgent(Agent):
         cb.remove()
         grid_evaluations = griddata(test_x, evaluation.loc.max(0)[1].cpu(), (self.meshgrid_points[0], self.meshgrid_points[1]), method='nearest')
         # plt.imshow(evaluation.loc.max(0)[1].reshape(self.meshgrid_points[0].shape), cmap='terrain', origin='lower')
+        plt.scatter(*self.inputs.cpu().numpy().T, marker='.', s=1, c='r')
         plt.imshow(grid_evaluations, cmap='terrain', origin='lower', extent=np.ravel(self.input_bounds))
         cb = plt.colorbar() 
         plt.savefig(f'predictions.png')

@@ -36,14 +36,14 @@ class ExperimentWatcher:
         self.y = []
         
         self.pipeline = [
-            agents.PCAAgent(n_components=.95),
-            agents.KMeansAgent(n_clusters=4, experiment_id=self.experiment_id), 
+            # agents.PCAAgent(n_components=.95),
+            agents.KMeansAgent(n_clusters=5, experiment_id=self.experiment_id), 
             agents.GPytorchAgent(input_bounds=[[low,high] for low, high in zip(self.motor_lows, self.motor_highs)], input_min_spacings=self.motor_min_steps, experiment_id=self.experiment_id)
             ]
 
     def run(self):
         # Create the first decision
-        num_random_measurements = 25
+        num_random_measurements = 10
         num_boundary_measurements = 3
 
         startup_decision = Decision(
