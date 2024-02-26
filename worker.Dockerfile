@@ -4,8 +4,11 @@
 # If you need more help, visit the Dockerfile reference guide at
 # https://docs.docker.com/go/dockerfile-reference/
 
-ARG PYTHON_VERSION=3.11
-FROM python:${PYTHON_VERSION}-slim as base
+# ARG PYTHON_VERSION=3.10
+# FROM python:${PYTHON_VERSION}-slim as base
+from nvcr.io/nvidia/rapidsai/base:24.02-cuda12.0-py3.10 as base
+
+USER root
 
 # Prevents Python from writing pyc files.
 ENV PYTHONDONTWRITEBYTECODE=1
@@ -32,8 +35,23 @@ WORKDIR /app
 # Leverage a cache mount to /root/.cache/pip to speed up subsequent builds.
 # Leverage a bind mount to requirements.txt to avoid having to copy them into
 # into this layer.
-RUN --mount=type=cache,target=/root/.cache/pip \
-    --mount=type=bind,source=celery_requirements.txt,target=celery_requirements.txt \
+# RUN --mount=type=cache,target=/root/.cache/pip \
+#     --mount=type=bind,source=celery_requirements.txt,target=celery_requirements.txt \ 
+
+# RUN --mount=type=cache,target=/root/.cache/pip \
+#     --mount=type=bind,source=celery_requirements.txt,target=celery_requirements.txt \ 
+#     python -m pip install \
+#     --extra-index-url=https://pypi.nvidia.com \
+#     cuml-cu12==24.2.*
+    # cudf-cu12==24.2.* dask-cudf-cu12==24.2.* cuml-cu12==24.2.* \
+    # cugraph-cu12==24.2.* cuspatial-cu12==24.2.* cuproj-cu12==24.2.* \
+    # cuxfilter-cu12==24.2.* cucim-cu12==24.2.* pylibraft-cu12==24.2.* \
+    # raft-dask-cu12==24.2.*
+
+# RUN --mount=type=bind,source=celery_requirements.txt,target=celery_requirements.txt \ 
+#     python -m pip install torch
+
+RUN --mount=type=bind,source=celery_requirements.txt,target=celery_requirements.txt \ 
     python -m pip install -r celery_requirements.txt
 
 # Switch to the non-privileged user to run the application.

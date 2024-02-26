@@ -41,6 +41,9 @@ whitelist = ['131.243.73.200', '172.17.0.1', '172.25.0.1']
 #ELI IPs:
 whitelist.extend(['131.243.88.203'])
 
+#Backup Computer IP:
+whitelist.extend(['131.243.73.174'])
+
 class Server:
     def __init__(self):
         create_tables()
@@ -76,6 +79,7 @@ class Server:
             self.server.send(result.model_dump_json(by_alias=True).encode('utf-8'))
 
     def handle_request(self, msg):
+        result = None
         start = time.perf_counter_ns()
         method = msg.get('method')
         if method is None:
@@ -108,6 +112,8 @@ class Server:
             logging.error(f"Unknown method: {method}")
 
         logging.info(f"Returning result for {method} request after {(time.perf_counter_ns() - start)/1e6:.03f}ms")
+        if result is None:
+            logging.error(f"Result for {msg} request is None")
         return result
 
 
@@ -133,7 +139,8 @@ class Server:
     
     def handle_data(self, msg):
         logging.info("Handling data request")
-        
+        # logging.info(msg)
+        celery_app.send_task("celery_workers.tasks.save_data", args=(msg,))
         return mm.MaestroLVResponseOK()
 
     def handle_position(self, msg):

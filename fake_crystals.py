@@ -30,6 +30,9 @@ class FakeVoronoiCrystal:
         self.vor = Voronoi(vor_points)
         self.xcoords = np.arange(bounds[0][0], bounds[0][1], min_steps[0])
         self.ycoords =  np.arange(bounds[1][0], bounds[1][1], min_steps[1])
+        self.xmin, self.xmax, self.ymin, self.ymax = self.get_boundaries()
+        self.xdelta = min_steps[0]
+        self.ydelta = min_steps[1]
         self.plot()
 
     def get_label(self, x, y):
@@ -111,52 +114,59 @@ class FakeVoronoiCrystal:
         self.plot_grid((100,100))
 
 
-# class FakeGrapheneCrystal:
-#     def __init__(self):
-#         import h5py
-#         self.filename =  r"20190915_01325_binned.h5"
-#         self.file = h5py.File(self.filename, 'r')
-#         self.data = self.file['2D_Data']['Fixed_Spectra1'][:]
-#         self.xcoords = self.file['0D_Data']['Scan X'][:]
-#         self.ycoords = self.file['0D_Data']['Scan Y'][:]
+class FakeGrapheneCrystal:
+    def __init__(self):
+        import h5py
+        self.filename =  r"/mnt/MAESTROdata/nARPES/2019/2019_09/Rotenberg_Eli - 275451/Robinson/Twisted/20190915_01325.h5"
+        self.file = h5py.File(self.filename, 'r')
+        print("loading data...")
+        self.data = self.file['2D_Data']['Fixed_Spectra1']
+        print("loading coords...")
+        self.xcoords = self.file['0D_Data']['Scan X'][:]
+        self.ycoords = self.file['0D_Data']['Scan Y'][:]
+        self.xmin, self.xmax, self.ymin, self.ymax = self.get_boundaries()
+        print(f"{len(self.xcoords)=}")
+        self.xdelta = (self.xmax - self.xmin)/91
+        self.ydelta = (self.ymax - self.ymin)/91
 
 
-#     def measure(self, x, y):
-#         dx = (self.xcoords - x)**2
-#         dy = (self.ycoords - y)**2
-#         d = np.sqrt(dx + dy)
-#         i = np.argmin(d)
-#         measured_x = self.xcoords[i]
-#         measured_y = self.ycoords[i]
-#         spectrum = self.data[:,:,i]
-#         return measured_x, measured_y, spectrum
+    def measure(self, x, y):
+        print(f"Measuring at {x}, {y}")
+        dx = (self.xcoords - x)**2
+        dy = (self.ycoords - y)**2
+        d = np.sqrt(dx + dy)
+        i = np.argmin(d)
+        measured_x = self.xcoords[i]
+        measured_y = self.ycoords[i]
+        spectrum = self.data[:,:,i]
+        return measured_x, measured_y, spectrum.reshape((spectrum.shape[1], spectrum.shape[0]))
 
-#     def get_boundaries(self):
-#         return np.min(self.xcoords), np.max(self.xcoords), np.min(self.ycoords), np.max(self.ycoords)
+    def get_boundaries(self):
+        return np.min(self.xcoords), np.max(self.xcoords), np.min(self.ycoords), np.max(self.ycoords)
 
         
-# class FakeWSe2Crystal:
-#     def __init__(self):
-#         from astropy.io import fits
-#         self.filename =  r"20161215_00045_binned.fits"
-#         self.file = fits.open(self.filename)
-#         self.data = self.file[1].data['Fixed_Spectra0']
-#         self.xcoords = self.file[1].data['Scan Z']
-#         self.ycoords = self.file[1].data['Scan Y']
+class FakeWSe2Crystal:
+    def __init__(self):
+        from astropy.io import fits
+        self.filename =  r"/mnt/MAESTROdata/nARPES/2016/201612/WS2_hBN_TiO2_sample26/20161215_00045.fits"
+        self.file = fits.open(self.filename)
+        self.data = self.file[1].data['Fixed_Spectra0']
+        self.xcoords = self.file[1].data['Scan Z']
+        self.ycoords = self.file[1].data['Scan Y']
 
 
-#     def measure(self, x, y):
-#         dx = (self.xcoords - x)**2
-#         dy = (self.ycoords - y)**2
-#         d = np.sqrt(dx + dy)
-#         i = np.argmin(d)
-#         measured_x = self.xcoords[i]
-#         measured_y = self.ycoords[i]
-#         spectrum = self.data[i,:,:]
-#         return measured_x, measured_y, spectrum
+    def measure(self, x, y):
+        dx = (self.xcoords - x)**2
+        dy = (self.ycoords - y)**2
+        d = np.sqrt(dx + dy)
+        i = np.argmin(d)
+        measured_x = self.xcoords[i]
+        measured_y = self.ycoords[i]
+        spectrum = self.data[i,:,:]
+        return measured_x, measured_y, spectrum
 
-#     def get_boundaries(self):
-#         return np.min(self.xcoords), np.max(self.xcoords), np.min(self.ycoords), np.max(self.ycoords)
+    def get_boundaries(self):
+        return np.min(self.xcoords), np.max(self.xcoords), np.min(self.ycoords), np.max(self.ycoords)
 
 
 def main():
@@ -174,10 +184,23 @@ def main():
 #     
 #     plt.imshow(spectrum.T, origin='lower', cmap='Greys')
 #     plt.show()
-     vor = FakeVoronoiCrystal(num_crystallites=50, num_angles=128, num_energies=128, bounds=[[-10,10], [-10,10]], min_steps=[0.05, 0.05])
+    #  vor = FakeVoronoiCrystal(num_crystallites=50, num_angles=128, num_energies=128, bounds=[[-10,10], [-10,10]], min_steps=[0.05, 0.05])
     #  vor.plot()
-#     wse2 = FakeWSe2Crystal()
-#     xmin, xmax, ymin, ymax = wse2.get_boundaries()
+    start = perf_counter()
+    wse2 = FakeGrapheneCrystal()
+    end = perf_counter()
+    print(f"Time to load: {(end-start):.3f} s")
+    xmin, xmax, ymin, ymax = wse2.get_boundaries()
+    print(wse2.xmin, wse2.xmax, wse2.ymin, wse2.ymax, wse2.xdelta, wse2.ydelta)
+    start = perf_counter()
+    x = np.random.uniform(xmin, xmax)
+    y = np.random.uniform(ymin, ymax)
+    _, _, spectrum = wse2.measure(x, y)
+    end = perf_counter()
+    print(f"Time per measurement: {(end-start):.3f} s")
+    print(f"Spectrum shape: {spectrum.shape}")
+    plt.imshow(spectrum.reshape(spectrum.shape[::-1]), origin='lower', cmap='Greys')
+    plt.savefig("gr.png")
 
 #     for _ in range(10):
 #         x_choice, y_choice = np.random.uniform(xmin, xmax), np.random.uniform(ymin, ymax)

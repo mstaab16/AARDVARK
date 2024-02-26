@@ -4,7 +4,7 @@
 # If you need more help, visit the Dockerfile reference guide at
 # https://docs.docker.com/go/dockerfile-reference/
 
-ARG PYTHON_VERSION=3.11
+ARG PYTHON_VERSION=3.10
 FROM python:${PYTHON_VERSION}-slim as base
 
 # Prevents Python from writing pyc files.
@@ -35,6 +35,13 @@ WORKDIR /app
 RUN --mount=type=cache,target=/root/.cache/pip \
     --mount=type=bind,source=server_requirements.txt,target=server_requirements.txt \
     python -m pip install -r server_requirements.txt
+
+# RUN python -m pip install --no-cache-dir\
+#     --extra-index-url=https://pypi.nvidia.com \
+#     cudf-cu12==24.2.* dask-cudf-cu12==24.2.* cuml-cu12==24.2.* \
+#     cugraph-cu12==24.2.* cuspatial-cu12==24.2.* cuproj-cu12==24.2.* \
+#     cuxfilter-cu12==24.2.* cucim-cu12==24.2.* pylibraft-cu12==24.2.* \
+#     raft-dask-cu12==24.2.*
 
 # Switch to the non-privileged user to run the application.
 # USER appuser

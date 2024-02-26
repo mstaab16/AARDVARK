@@ -13,4 +13,3 @@ scikit-image
 gpytorch
 tqdm
 torch
-# torchvision

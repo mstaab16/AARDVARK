@@ -42,7 +42,7 @@ class Data(Base):
     message = Column(String)
     fieldname = Column(String)
     data_cycle = Column(Integer)
-    data = Column(LargeBinary)
+    data = Column(String)
     data_info = Column(JSONB)
 
     measurement = relationship("Measurement", back_populates="data")

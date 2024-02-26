@@ -9,8 +9,8 @@ from gpytorch.means import ConstantMean
 from gpytorch.kernels import ScaleKernel, RBFKernel
 from scipy.ndimage import gaussian_filter
 from scipy.optimize import minimize, basinhopping
-import tqdm
 
+from . import tasks
 import matplotlib.pyplot as plt
 
 
@@ -198,24 +198,81 @@ class KPCAAgent(Agent):
         raise NotImplementedError
     
 
-from sklearn.decomposition import PCA
+# from sklearn.decomposition import PCA
+from cuml import IncrementalPCA as PCA
 class PCAAgent(Agent):
     """A simple naive agent that cycles samples sequentially in environment space"""
 
     def __init__(self, **kwargs):
         print("Creating PCAAgent")
         self.kwargs = kwargs
-        if kwargs.get('n_components') is None:
-            raise ValueError("Please enter a non-None value for n_components of PCA.")
+        self.n_components = kwargs.get('n_components') if kwargs.get('n_components') is not None else 50
+        # if kwargs.get('n_components') is None:
+        #     raise ValueError("Please enter a non-None value for n_components of PCA.")
+        
 
     def tell(self, x, y):
         print(f"PCAAgent told about new data: {x.shape=}, {y.shape=}")
-        if len(y) < self.kwargs.get('n_components'):
-            self.PCA = PCA(n_components=None, **{k:v for k,v in self.kwargs.items() if k!='n_components'})
-            return x, self.PCA.fit_transform(y)
+        start = time.perf_counter_ns()
+        # if len(y) < self.kwargs.get('n_components'):
+        #     self.PCA = PCA(n_components=None, **{k:v for k,v in self.kwargs.items() if k!='n_components'})
+        #     return x, self.PCA.fit_transform(y)
         
-        self.PCA = PCA(**self.kwargs)
-        return x, self.PCA.fit_transform(y)
+        self.PCA = PCA(n_components=min(self.n_components, len(y)))
+        result = self.PCA.fit_transform(y.astype(np.float32))
+        end = time.perf_counter_ns()
+        print(f"PCA took {(end-start)/1e6:.02f}ms to fit.")
+        return x, result
+    
+    def ask(self, batch_size):
+        raise NotImplementedError
+    
+    def tell_many(self, x, y):
+        raise NotImplementedError
+
+from cuml import UMAP
+class UMAPAgent(Agent):
+    def __init__(self, **kwargs):
+        print("Creating UMAPAgent")
+        self.kwargs = kwargs
+        self.n_components = kwargs.get('n_components') if kwargs.get('n_components') is not None else 2
+
+    def tell(self, x, y):
+        print(f"UMAPAgent told about new data: {x.shape=}, {y.shape=}")
+        start = time.perf_counter_ns()
+        self.UMAP = UMAP(n_components=self.n_components)
+        new_y = self.UMAP.fit_transform(y.astype(np.float32))
+        end = time.perf_counter_ns()
+        print(f"UMAP took {(end-start)/1e6:.02f}ms to fit.")
+        return x, new_y
+    
+    def ask(self, batch_size):
+        raise NotImplementedError
+    
+    def tell_many(self, x, y):
+        raise NotImplementedError
+
+from cuml.cluster.hdbscan import HDBSCAN
+class HDBSCANAgent(Agent):
+    def __init__(self, *args, **kwargs):
+        print("Creating HDBSCANAgent")
+        self.args = args
+        self.kwargs = kwargs
+
+    def tell(self, x, y):
+        print(f"HDBSCANAgent told about new data: {x.shape=}, {y.shape=}")
+        start = time.perf_counter_ns()
+        if len(y) < 2:
+            self.labels = np.zeros(len(y))
+            new_y = np.zeros(len(y))
+        else:
+            self.HDBSCAN = HDBSCAN(**self.kwargs)
+            self.labels = self.HDBSCAN.fit(y.astype(np.float32))
+            new_y = self.HDBSCAN.labels_ + 1
+            # print(new_y)
+        end = time.perf_counter_ns()
+        print(f"HDBSCAN took {(end-start)/1e6:.02f}ms to fit.")
+        return x, new_y
     
     def ask(self, batch_size):
         raise NotImplementedError
@@ -224,7 +281,8 @@ class PCAAgent(Agent):
         raise NotImplementedError
 
 
-from sklearn.cluster import KMeans
+# from sklearn.cluster import KMeans
+from cuml.cluster import KMeans
 class KMeansAgent(Agent):
     """A simple naive agent that cycles samples sequentially in environment space"""
 
@@ -237,20 +295,22 @@ class KMeansAgent(Agent):
 
     def tell(self, x, y):
         print(f"KMeansAgent told about new data: {x.shape=}, {y.shape=}")
+        start = time.perf_counter_ns()
         if len(y) < self.n_clusters:
             self.labels = np.zeros(len(y))
             new_y = np.zeros(len(y))
         else:
-            self.KMeans = KMeans(n_clusters=self.n_clusters)
-            self.KMeans.fit(y)
+            self.KMeans = KMeans(n_clusters=self.n_clusters, n_init=10)#, max_iter=300, n_init=10)
+            self.KMeans.fit(y.astype(np.float32))
             self.labels = self.KMeans.labels_
             new_y = self.labels
 
         #     new_y = np.zeros((len(self.KMeans.labels_), self.kwargs.get('n_clusters')))
         #     for i, label in enumerate(self.KMeans.labels_):
         #         new_y[i,label] = 1
+        end = time.perf_counter_ns()
+        print(f"KMeans took {(end-start)/1e6:.02f}ms to fit.")
         return x, new_y
-        
     
     def ask(self, batch_size):
         raise NotImplementedError
@@ -319,7 +379,10 @@ class GPytorchAgent(Agent):
         #     self.targets = torch.cat([self.targets, torch.atleast_1d(torch.tensor(y, device=self.device, dtype=torch.int32))], dim=0)
         #     self.inputs.to(self.device)
         #     self.targets.to(self.device)
+        start = time.perf_counter_ns()
         self.fit()
+        end = time.perf_counter_ns()
+        print(f"GP took {(end-start)/1e6:.02f}ms to fit.")
         return x, y
         # self.surrogate_model.set_train_data(self.inputs, self.targets, strict=False)
         # return dict(independent_variable=x, observable=y, cache_len=len(self.targets))
@@ -348,7 +411,7 @@ class GPytorchAgent(Agent):
         # "Loss" for GPs - the marginal log likelihood
         mll = gpytorch.mlls.ExactMarginalLogLikelihood(likelihood, model)
         
-        training_iterations = 50
+        training_iterations = 100
         print("Training GP")
         for i in range(training_iterations):
         # iterator = tqdm.tqdm(range(training_iterations))
@@ -358,7 +421,7 @@ class GPytorchAgent(Agent):
             # loss = -mll(output, train_y)
             loss = -mll(output, likelihood.transformed_targets).sum()
             loss.backward()
-            print('Iter %d/%d - Loss: %.3f' % (i + 1, training_iterations, loss.item()))
+            # print('Iter %d/%d - Loss: %.3f' % (i + 1, training_iterations, loss.item()))
             optimizer.step()
 
         model.eval()
@@ -393,8 +456,9 @@ class GPytorchAgent(Agent):
         # local_maxima = local_maxima[np.argsort(scores)]
         # print(f"Asking GP... Currently have {len(self.inputs)} inputs and {len(self.targets)} targets.")
         # # return 1,1
-        if len(self.plotting_positions) > 5_000:
-            test_x = self.plotting_positions[np.random.choice(len(self.plotting_positions), 5_000)]
+        max_n_samples = 10_000
+        if len(self.plotting_positions) > max_n_samples:
+            test_x = self.plotting_positions[np.random.choice(len(self.plotting_positions), max_n_samples)]
         else:
             test_x = self.plotting_positions
         
@@ -413,19 +477,20 @@ class GPytorchAgent(Agent):
         # # # The stds here actually represent the uncertainty on the proabbility of each label.
         # stds = stds.sum(0).detach().cpu().numpy()
         stds = stds.sum(0).detach().cpu().numpy()
-        grid_stds = griddata(test_x, stds, (self.meshgrid_points[0], self.meshgrid_points[1]), method='nearest')
+        partial = tasks.plot_griddata.s(xs=test_x, ys=np.copy(stds))
+        # grid_stds = griddata(test_x, stds, (self.meshgrid_points[0], self.meshgrid_points[1]), method='nearest')
         # plt.imshow(stds.reshape(self.meshgrid_points[0].shape), cmap='terrain', origin='lower')
         
         # plt.scatter(*local_maxima.T, marker='o', color='k')
-        plt.imshow(grid_stds, cmap='terrain', origin='lower', extent=np.ravel(self.input_bounds))
-        
+        # plt.imshow(grid_stds, cmap='terrain', origin='lower', extent=np.ravel(self.input_bounds))
+        # cb = plt.colorbar() 
 
         # # stds_all = stds_all.detach().cpu().numpy()
         # # probability = stds
         # # means = evaluation.mean.detach().cpu().numpy()
         # # stds = stds**3
         choice_indices = np.argsort(stds.flatten())
-        num_most_uncertain_to_measure_first = 1 # batch_size
+        num_most_uncertain_to_measure_first = 1
         most_uncertain_indices = choice_indices[-num_most_uncertain_to_measure_first:][::-1]
         p = stds[:-num_most_uncertain_to_measure_first]
         if p.sum()!=0:
@@ -441,10 +506,14 @@ class GPytorchAgent(Agent):
         # next_positions = list(self.all_possible_positions[most_uncertain_indices[-batch_size:]].detach().cpu().numpy())
         
         next_positions = test_x[selected_indices]
-        plt.scatter(*next_positions.T, marker='x', color='r')
-        cb = plt.colorbar() 
-        plt.savefig(f'stds.png')
-        plt.clf()
+        # plt.scatter(*next_positions.T, marker='x', color='r')
+        partial.apply_async(args=[], kwargs=dict(grid_points=self.meshgrid_points,\
+                            scatter_xs=next_positions.T[0],\
+                            scatter_ys=next_positions.T[1],\
+                            bounds=self.input_bounds,\
+                            filename='stds.png'))
+        # plt.savefig(f'stds.png')
+        # plt.clf()
         print("Next positions selected...")
         print("Plotting")
         grid_inputs = griddata(self.inputs.cpu(), self.targets.cpu(), (self.meshgrid_points[0], self.meshgrid_points[1]), method='nearest')

@@ -8,6 +8,26 @@
 # database or a cache. For examples, see the Awesome Compose repository:
 # https://github.com/docker/awesome-compose
 services:
+  dash_app:
+    build:
+      context: .
+      dockerfile: server.Dockerfile
+    working_dir: /app
+    command: python dash_app.py
+    volumes:
+      - ./app:/app
+      - /mnt/MAESTROdata:/mnt/MAESTROdata:ro
+    env_file:
+      - .env
+    environment:
+      - DATABASE_URL=postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
+    ports:
+      - 80:80
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
 
   server:
     build:
@@ -17,6 +37,7 @@ services:
     command: python server.py
     volumes:
       - ./app:/app
+
     env_file:
       - .env
     environment:
@@ -67,7 +88,7 @@ services:
       - .env
     environment:
       - DATABASE_URL=postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
-    command: celery -A celery_workers.tasks worker --loglevel=info --pool=solo
+    command: celery -A celery_workers.tasks worker --loglevel=info #--pool=solo
     deploy:
       resources:
         reservations:
@@ -77,6 +98,7 @@ services:
             capabilities: [gpu]
     volumes:
       - ./app:/app
+      - /mnt/MAESTROdata:/mnt/MAESTROdata:ro
     depends_on:
       - redis
     

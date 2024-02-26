@@ -18,12 +18,12 @@ import pickle
 
 from db.database import get_db
 from db.models import Experiment, Decision, Measurement, Data, Report
-from sqlalchemy import func
+# from sqlalchemy import func
 from maestro_api import maestro_messages as mm
 
-app = dash.Dash(__name__,#  external_stylesheets=[dbc.themes.BOOTSTRAP]
+app = dash.Dash(__name__)#  external_stylesheets=[dbc.themes.BOOTSTRAP]
                 ### THE ONLY CHANGE FROM THE ABOVE, PLEASE ADD IN THIS LINE
-                requests_pathname_prefix='/dashboard/')
+                #requests_pathname_prefix='/dashboard/')
 
 def array_to_rgb_image(data_array, colormap='Grays', vmin=None, vmax=None):
     # Normalize the data array
@@ -316,7 +316,7 @@ def update_data_image(n, experiment_id):
         data_info = json.loads(data_info)
         # data =  base64.decodebytes(data)
         # print("Dash sees: ", data)
-        data = np.frombuffer(data, dtype=np.int32).reshape(*data_info['dimensions'], order='F')
+        data = np.fromfile(data, dtype=np.int32).reshape(*data_info['dimensions'], order='F')
         # print("numpy read data: ", data)
         # data = np.frombuffer(data, dtype=np.int32).reshape(*data_info['dimensions'])
         fig = px.imshow(data.T, origin='lower')
@@ -328,7 +328,5 @@ def update_data_image(n, experiment_id):
         # fig.update_yaxes(range=[-10, 10])
     return fig
 
-
-
 if __name__ == "__main__":
-    app.run_server(debug=True)
+    app.run(debug=True, port=80, host='0.0.0.0')

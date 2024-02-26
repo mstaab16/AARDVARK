@@ -106,7 +106,7 @@ class FitsDescriptor(BaseModel):
     scaledelta: List[float]
     unitnames: List[str]
     axisnames: List[str]
-    Data: bytes
+    Data: str
     
     class Config:
         populate_by_name = True
