@@ -74,7 +74,7 @@ class MaestroLVStartupMessage(BaseModel):
     AI_Controller: str = Field(..., alias='AI Controller')
     AIModeparms: List[AIModeparm]
     max_count: int = Field(..., alias='max #')
-    method: str
+    method: str = "initialize"
     scan_descriptors: ScanDescriptors = Field(..., alias='scan descriptors')
 
     class Config:
@@ -106,7 +106,7 @@ class FitsDescriptor(BaseModel):
     scaledelta: List[float]
     unitnames: List[str]
     axisnames: List[str]
-    Data: bytes
+    Data: str
     
     class Config:
         populate_by_name = True
@@ -131,13 +131,15 @@ class MaestroLVDataMessage(BaseModel):
 ########################################################################################
 class MaestroLVCloseMessage(BaseModel):
     current_data_cycle: int = Field(default=0, alias='current data cycle')
+    current_ai_cycle: int = Field(default=0, alias='current AI cycle')
     method: str = "closing"
 
     class Config:
         populate_by_name = True
 
 class MaestroLVAbortMessage(BaseModel):
-    current_data_cycle: int = Field(default=0, alias='current data cycle')
+    # current_data_cycle: int = Field(default=0, alias='current data cycle')
+    # current_ai_cycle: int = Field(default=0, alias='current AI cycle')
     method: str = "abort"
 
     class Config:
@@ -176,12 +178,4 @@ class MaestroLVPositionResponse(MaestroLVResponse):
 
     class Config:
         populate_by_name = True
-
-# MaestroLVPositionResponse = RootModel[List[MotorPosition]]
-# class MaestroLVPositionResponse(BaseModel):
-#     __root__: List[MotorPosition]
-
-#     class Config:
-#         populate_by_name = True
-
 
