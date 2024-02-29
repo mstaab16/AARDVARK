@@ -1,0 +1,1 @@
+find 2023/ -name "*.h5" -size +10G -printf "\"%p\"\n" | xargs du -h

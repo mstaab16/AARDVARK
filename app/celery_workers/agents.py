@@ -300,7 +300,7 @@ class KMeansAgent(Agent):
             self.labels = np.zeros(len(y))
             new_y = np.zeros(len(y))
         else:
-            self.KMeans = KMeans(n_clusters=self.n_clusters, n_init=10)#, max_iter=300, n_init=10)
+            self.KMeans = KMeans(n_clusters=self.n_clusters, n_init=20)#, max_iter=300, n_init=10)
             self.KMeans.fit(y.astype(np.float32))
             self.labels = self.KMeans.labels_
             new_y = self.labels

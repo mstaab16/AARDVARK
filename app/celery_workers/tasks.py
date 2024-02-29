@@ -39,7 +39,7 @@ class ExperimentWatcher:
         self.pipeline = [
             agents.UMAPAgent(n_components=3),
             # agents.PCAAgent(n_components=100),
-            agents.KMeansAgent(n_clusters=6),
+            agents.KMeansAgent(n_clusters=4),
             # agents.HDBSCANAgent(n_clusters=6), 
             agents.GPytorchAgent(input_bounds=[[low,high] for low, high in zip(self.motor_lows, self.motor_highs)], input_min_spacings=self.motor_min_steps, experiment_id=self.experiment_id)
             ]
@@ -47,7 +47,7 @@ class ExperimentWatcher:
     def run(self):
         # Create the first decision
         num_to_suggest=25
-        num_random_measurements = 10
+        num_random_measurements = 25
         num_boundary_measurements = 3
 
         startup_decision = Decision(
@@ -88,7 +88,7 @@ class ExperimentWatcher:
                 print("Experiment is no longer active. Shutting down...")
                 return
             new_measurements = self.update_data()
-            if len(self.data_ids) < len(boundary_measurements):
+            if len(self.data_ids) < len(boundary_measurements) + num_boundary_measurements * 0.9:
                 print("Not enough data to train on")
                 time.sleep(1)
                 continue

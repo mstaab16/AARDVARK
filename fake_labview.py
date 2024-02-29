@@ -19,7 +19,7 @@ class FakeLV:
 
         self.current_ai_cycle = 0
         self.current_data_cycle = 0
-        self.max_ai_cycle = 828
+        self.max_ai_cycle = 50
         self.measurement_delay = 0.00001
         self.num_energies = 256
         self.num_angles = 256
