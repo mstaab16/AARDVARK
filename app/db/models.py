@@ -1,4 +1,5 @@
-from sqlalchemy import Boolean, Column, ForeignKey, Integer, String, JSON, LargeBinary
+from sqlalchemy import Boolean, Column, ForeignKey, Integer, String, JSON, LargeBinary, DateTime
+from sqlalchemy.sql import func
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import relationship
 
@@ -67,6 +68,6 @@ class Report(Base):
     args = Column(JSONB)
     description = Column(String)
     data = Column(JSONB)
-    time = Column(String)
+    time = Column(DateTime(timezone=True), server_default=func.now())
 
     experiment = relationship("Experiment", back_populates="reports")

@@ -39,7 +39,7 @@ class ExperimentWatcher:
         self.pipeline = [
             agents.UMAPAgent(n_components=3),
             # agents.PCAAgent(n_components=100),
-            agents.KMeansAgent(n_clusters=4),
+            agents.KMeansAgent(n_clusters=6),
             # agents.HDBSCANAgent(n_clusters=6), 
             agents.GPytorchAgent(input_bounds=[[low,high] for low, high in zip(self.motor_lows, self.motor_highs)], input_min_spacings=self.motor_min_steps, experiment_id=self.experiment_id)
             ]
@@ -223,10 +223,53 @@ class ExperimentWatcher:
             measurements.append(measurement)
         return measurements 
 
+# class Pipeline:
+#     def __init__(self, name, experiment_id, pipeline):
+#         self.name = name
+#         self.pipeline = pipeline
+#         self.db_gen = get_db()
+#         self.db = next(self.db_gen)
+#         self.experiment_id = experiment_id
+
+#     def tell
+    
+
+
 @app.task
 def setup_experiment_watcher(experiment_id):
     experiment_watcher = ExperimentWatcher(experiment_id)
+    # experiment_watcher.register_pipeline()
     experiment_watcher.run()
+
+@app.task
+def scatter_plot_report(experiment_id, name, x, y):
+    x = np.asarray(x).tolist()
+    y = np.asarray(y).tolist()
+    data = {
+        "x": x,
+        "y": y,
+    }
+    save_report(experiment_id, name, data)
+
+@app.task
+def image_report(experiment_id, name, matrix):
+    matrix = np.asarray(matrix).tolist()
+    data = {
+        "image": matrix,
+    }
+    save_report(experiment_id, name, data)
+
+@app.task
+def save_report(experiment_id, name, data, **kwargs):
+    db_gen = get_db()
+    db = next(db_gen)
+    try:
+        report = Report(experiment_id=experiment_id, name=name, data=data, **kwargs)
+    except TypeError as e:
+        logging.log(logging.ERROR, f"Error: {e}")
+        return
+    db.add(report)
+    db.commit()
 
 @app.task
 def save_data(msg):

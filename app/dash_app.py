@@ -8,6 +8,7 @@ import plotly.graph_objects as go
 
 import pandas as pd
 import numpy as np
+from skimage.transform import resize
 from matplotlib.colors import Normalize, to_rgba
 from matplotlib.cm import ScalarMappable
 import json
@@ -47,246 +48,34 @@ def np_image_to_base64(im_matrix):
     im_url = "data:image/jpeg;base64, " + encoded_image
     return im_url
 
-# app.layout = html.Div([
-#     # Scatter plot
-#     html.Div([
-#         dcc.Graph(id='scatter-plot'),
-#     ], style={'width': '33%', 'display': 'inline-block'}),
-
-#     # Image 1
-#     html.Div([
-#         html.Img(id='image-1'),
-#     ], style={'width': '33%', 'display': 'inline-block'}),
-
-#     # Image 2
-#     html.Div([
-#         html.Img(id='image-2'),
-#     ], style={'width': '33%', 'display': 'inline-block'}),
-# ])
-
-# # Sample image data
-# # image_path_1 = 'path_to_your_image_1.png'
-# # image_path_2 = 'path_to_your_image_2.png'
-
-# # Callback to update scatter plot
-# @app.callback(
-#     Output('scatter-plot', 'figure'),
-#     Input('scatter-plot', 'id')
-# )
-# def update_scatter_plot(_):
-#     return {
-#         'data': [
-#             go.Scatter(
-#                 # x=scatter_data['x'],
-#                 # y=scatter_data['y'],
-#                 # mode='markers',
-#                 # marker=dict(size=10),
-#             ),
-#         ],
-#         'layout': go.Layout(
-#             title='Scatter Plot',
-#             showlegend=False,
-#         ),
-#     }
-
-# # Callbacks to update images
-# @app.callback(
-#     Output('image-1', 'src'),
-#     Output('image-2', 'src'),
-#     Input('scatter-plot', 'id')
-# )
-# def update_images(_):
-#     # Sample image paths (replace with your paths)
-#     # image_path_1 = 'path_to_your_updated_image_1.png'
-#     # image_path_2 = 'path_to_your_updated_image_2.png'
-
-#     # Encode images to base64 for display
-#     # encoded_image_1 = base64.b64encode(open(image_path_1, 'rb').read()).decode('ascii')
-#     # encoded_image_2 = base64.b64encode(open(image_path_2, 'rb').read()).decode('ascii')
-#     # arr1 = np.random.uniform(0,1e6,(128,128)).astype(np.int32)
-#     x = np.linspace(-1,1,128)
-#     y = np.linspace(-1,1,128)
-#     x, y = np.meshgrid(x,y)
-#     arr1 = np.exp(-(x**2 + y**2))
-#     # arr1 /= arr1.max()
-#     # arr1 *= 1e9
-#     # arr1 = arr1.astype(np.int32)
-
-#     # arr1 = np.max(arr1)
-#     encoded_image_1 = np_image_to_base64(arr1)
-#     encoded_image_2 = np_image_to_base64(arr1)
-
-#     return encoded_image_1, encoded_image_2
-
-
-# scatter_fig = go.Figure(data=go.Scatter3d())
-# scatter_fig.update_traces(
-#     hoverinfo="none",
-#     hovertemplate=None,
-# )
-
-# app.layout = html.Div([
-#     html.H4('Interactive scatter plot'),
-#     dcc.Input(id='experiment-id', type='number', value=1, required=True),
-#     html.Div([
-#         dcc.Graph(id="scatter-plot", figure=scatter_fig),
-#     ]),
-#     dcc.Graph(id="image"),
-#     # html.P("Filter by petal width:"),
-#     dcc.Interval(
-#             id='interval-component',
-#             interval=1*1000, # in milliseconds
-#             n_intervals=0
-#         ),
-# ])
-
-# @app.callback(
-#     Output("scatter-plot", "figure"), 
-#     Input('interval-component', 'n_intervals'),
-#     Input('experiment-id', 'value'),
-# )
-# def update_bar_chart(n, experiment_id):
-#     try:
-#         db_gen = get_db()
-#         db = next(db_gen)
-#         query = db.query(Measurement).filter(Measurement.experiment_id == experiment_id, Measurement.measured == True).order_by(Measurement.ai_cycle)
-#         df = pd.read_sql(query.statement, query.session.bind)
-#         positions=pd.json_normalize(df['positions'])
-#         fig = go.Figure(data=go.scatter3d(
-#             positions, x="motors::X", y="motors::Y", 
-#             width=500, height=500,
-#             # color="species", size='petal_length', 
-#             hover_data=["thumbnail"])
-#         )
-#         fig.update_xaxes(range=[0, 1])
-#         fig.update_yaxes(range=[0, 1])
-#         return fig
-#     except:
-#         fig = px.scatter(width=500, height=500)
-#         fig.update_xaxes(range=[-10, 10])
-#         fig.update_yaxes(range=[-10, 10])
-#         return fig
-    
-# @app.callback(
-#     Output("graph-tooltip-5", "show"),
-#     Output("graph-tooltip-5", "bbox"),
-#     Output("graph-tooltip-5", "children"),
-#     Input("graph-5", "hoverData"),
-#     Input('experiment-id', 'value'),
-# )
-# def display_hover(hoverData, experiment_id):
-#     if hoverData is None:
-#         return False, no_update, no_update
-
-#     # demo only shows the first point, but other points may also be available
-#     img_pickled = hoverData["thubmnail"]
-#     bbox = hoverData["bbox"]
-#     img_matrix = pickle.loads(img_pickled)
-
-#     im_url = np_image_to_base64(img_matrix)
-#     children = [
-#         html.Div([
-#             html.Img(
-#                 src=im_url,
-#                 style={"width": "50px", 'display': 'block', 'margin': '0 auto'},
-#             ),
-#         ])
-#     ]
-
-#     return True, bbox, children
-
-# @app.callback(
-#     Output("image", "figure"), 
-#     Input('interval-component', 'n_intervals'),
-#     Input('experiment-id', 'value'),
-# )
-# def update_bar_chart(n, experiment_id):
-#     try:
-#         db_gen = get_db()
-#         db = next(db_gen)
-#         data, data_info = db.query(Data.data, Data.data_info).filter(Data.experiment_id == experiment_id, Data.fieldname == "Fixed_Spectra0").order_by(Data.measurement_id.desc()).first()
-#         data_info = json.loads(data_info)
-#         data =  base64.decodebytes(data)
-#         data = np.frombuffer(data, dtype=np.int32).reshape(*data_info['dimensions'])
-#         fig = px.imshow(data)
-#     except Exception as e:
-#         print(e)
-#         # pass
-#         fig = px.imshow(np.random.uniform(0,1,(8,8)), width=500, height=500)
-#         # fig.update_xaxes(range=[-10, 10])
-#         # fig.update_yaxes(range=[-10, 10])
-#     return fig
-
-
 app.layout = html.Div([
     html.H4('Experiment id'),
-    dcc.Input(id='experiment-id', type='number', value=1, required=True),
+    dcc.Input(id='experiment-id', type='number', value=1, required=True), 
+    # html.H4('Spectrum bin factor for displaying faster'),
+    # dcc.Input(id='spectrum-bin-factor', type='number', value=4, required=True),
     html.H4('Number of Clusters to use'),
     dcc.Input(id='n-clusters', type='number', value=1, required=True),
+    dcc.Dropdown(options=[], id='report-type'),
     html.Div([
     html.Div(dcc.Graph(id="scatter-plot"), style={'width': '33%', 'display': 'inline-block'}),
+    html.Div(dcc.Graph(id="report"), style={'width': '33%', 'display': 'inline-block'}),
     html.Div(dcc.Graph(id="image"), style={'width': '33%', 'display': 'inline-block'}),
     ]),
-    # html.P("Filter by petal width:"),
-    dcc.Interval(
-            id='interval-component',
-            interval=1*1000, # in milliseconds
-            n_intervals=0
-        ),
-    # dash_table.DataTable(id='measurement-table', data=[]),
-    # html.Div([dash_table.DataTable(
-    #             id='measurement-table',
-    #             data=[],
-    #             # columns=[{"name": i, "id": i} for i in df.columns],
-    #             # fixed_rows={'headers': True, 'data': 0},
-    #             # fixed_columns={'headers': True, 'data': 1},
-    #             # export_columns='visible',
-    #             # export_format='xlsx')
-    # )], style={'border':'2px grey solid'})
 ])
-
-# @app.callback(
-#     Output('measurement-table', 'data'),
-#     Input('interval-component', 'value'),
-#     Input('experiment-id', 'value'),
-# )
-# def update_table_data(n, experiment_id):
-#     db = get_db().__next__()
-#     query = db.query(Measurement).filter(Measurement.experiment_id == experiment_id).order_by(Measurement.ai_cycle.desc())
-#     df = pd.read_sql(query.statement, query.session.bind)
-#     # positions=pd.json_normalize(df['positions'])
-
-#     return df.to_dict('records')
-
-# @app.callback(
-#     Output('measurement-table', 'columns'),
-#     Input('interval-component', 'value'),
-#     Input('experiment-id', 'value'),
-# )
-# def update_table_cols(n, experiment_id):
-#     db = get_db().__next__()
-#     query = db.query(Measurement).filter(Measurement.experiment_id == experiment_id).order_by(Measurement.ai_cycle.desc())
-#     df = pd.read_sql(query.statement, query.session.bind)
-
-#     return [{"name": i, "id": i} for i in df.columns]
 
 @app.callback(Output('image', 'figure'),
               Input("scatter-plot", "clickData"),
+              Input('image', 'figure'),
             #   Input("scatter-plot", "hoverData"),
             )
-def update_figure(clickData):
+def update_figure(clickData, figure):
     start = time.perf_counter_ns()
     # print(f"{clickData=}")
     if clickData is None:
         return no_update
-    # print(f"{clickData=}")
-    # # print(f"{hoverData=}")
-    # print(clickData['points'])
-    # print(clickData['points'][0])
-    # print(clickData['points'][0]['customdata'][0])
+    
     measurement_id = clickData['points'][0]['customdata'][0]
-    # print(f"{figure['data'][0]['z']=}")
-    # figure['data'][0]['z'] = data[n_intervals]
+    
     db_gen = get_db()
     db = next(db_gen)
     query = db.query(Data.data, Data.data_info).filter(Data.measurement_id == measurement_id, Data.fieldname == "Fixed_Spectra5").order_by(Data.measurement_id.desc()).first()
@@ -298,22 +87,62 @@ def update_figure(clickData):
     # data =  base64.decodebytes(data)
     # print("Dash sees: ", data)
     data = np.fromfile(data, dtype=np.int32).reshape(*data_info['dimensions'], order='F')
-    # print(data)
-    # print("numpy read data: ", data)
-    # data = np.frombuffer(data, dtype=np.int32).reshape(*data_info['dimensions'])
-    # figure['data'][0]['z'] = data
-    figure = px.imshow(data, origin='lower', color_continuous_scale='Blues')
+    data = resize(data, (128,128), anti_aliasing=True)
+    
+    if not figure:
+        figure = px.imshow(data, origin='lower', color_continuous_scale='Blues')
+    else:
+        figure['data'][0]['z'] = data
     print(f"Dash took {(time.perf_counter_ns()-start)/1e6:.02f}ms to update image.")
     return figure
+
+@app.callback(Output('report', 'figure'),
+            #   Input('interval-component', 'n_intervals'),
+              Input('experiment-id', 'value'),
+              Input('report-type', 'value'),
+            #   Input("scatter-plot", "hoverData"),
+            )
+def update_report(experiment_id, report_type):
+    start = time.perf_counter_ns()
+    db_gen = get_db()
+    db = next(db_gen)
+    query = db.query(Report.data['image']).filter(Report.experiment_id == experiment_id, Report.name == report_type).order_by(Report.report_id.desc()).first()
+    if query is None:
+        return no_update
+    image = query[0]
+    figure = px.imshow(image, origin='lower', color_continuous_scale='Viridis')
+    print(f"Dash took {(time.perf_counter_ns()-start)/1e6:.02f}ms to update report.")
+    return figure
+
+@app.callback(Output('report-type', 'options'),
+              Output('report-type', 'value'),
+            #   Input('interval-component', 'n_intervals'),
+              Input('report-type', 'value'),
+              Input('experiment-id', 'value'),
+            #   Input("scatter-plot", "hoverData"),
+            )
+def update_report(current_report_type, experiment_id):
+    start = time.perf_counter_ns()
+    db_gen = get_db()
+    db = next(db_gen)
+    query = db.query(Report.name).filter(Report.experiment_id == experiment_id, Report.data.has_key('image')).distinct()
+    if query is None:
+        return no_update
+    options = np.ravel(query.all())
+    # figure = px.imshow(query.data['image'], origin='lower', color_continuous_scale='Turbo')
+    print(f"Dash took {(time.perf_counter_ns()-start)/1e6:.02f}ms to update report-type options.")
+    if current_report_type not in options and options.size > 0:
+        current_report_type = options[0]
+    return options.tolist(), current_report_type
 
 
 @app.callback(
     Output("scatter-plot", "figure"), 
-    Input('interval-component', 'n_intervals'),
+    # Input('interval-component', 'n_intervals'),
     Input('experiment-id', 'value'),
     Input('n-clusters', 'value'),
 )
-def update_scatter_plot(n, experiment_id, n_clusters):
+def update_scatter_plot(experiment_id, n_clusters):
     try:
         db_gen = get_db()
         db = next(db_gen)
@@ -360,32 +189,6 @@ def update_scatter_plot(n, experiment_id, n_clusters):
         fig.update_xaxes(range=[-10, 10])
         fig.update_yaxes(range=[-10, 10])
         return fig
-
-# @app.callback(
-#     Output("image", "figure"), 
-#     Input('interval-component', 'n_intervals'),
-#     Input('experiment-id', 'value'),
-# )
-# def update_data_image(n, experiment_id):
-#     try:
-#         db_gen = get_db()
-#         db = next(db_gen)
-#         data, data_info = db.query(Data.data, Data.data_info).filter(Data.experiment_id == experiment_id, Data.fieldname == "Fixed_Spectra5").order_by(Data.measurement_id.desc()).first()
-#         # print("DASH SEES Data: " , data)
-#         data_info = json.loads(data_info)
-#         # data =  base64.decodebytes(data)
-#         # print("Dash sees: ", data)
-#         data = np.fromfile(data, dtype=np.int32).reshape(*data_info['dimensions'], order='F')
-#         # print("numpy read data: ", data)
-#         # data = np.frombuffer(data, dtype=np.int32).reshape(*data_info['dimensions'])
-#         fig = px.imshow(data.T, origin='lower')
-#     except Exception as e:
-#         print(e)
-#         # pass
-#         fig = px.imshow(np.random.uniform(0,1,(8,8)), width=500, height=500)
-#         # fig.update_xaxes(range=[-10, 10])
-#         # fig.update_yaxes(range=[-10, 10])
-#     return fig
 
 if __name__ == "__main__":
     app.run(debug=True, port=80, host='0.0.0.0')

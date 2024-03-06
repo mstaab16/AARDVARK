@@ -478,7 +478,8 @@ class GPytorchAgent(Agent):
         # stds = stds.sum(0).detach().cpu().numpy()
         stds = stds.sum(0).detach().cpu().numpy()
         partial = tasks.plot_griddata.s(xs=test_x, ys=np.copy(stds))
-        # grid_stds = griddata(test_x, stds, (self.meshgrid_points[0], self.meshgrid_points[1]), method='nearest')
+        grid_stds = griddata(test_x, stds, (self.meshgrid_points[0], self.meshgrid_points[1]), method='nearest')
+        tasks.image_report(experiment_id=self.experiment_id, matrix=grid_stds, name='uncertainties')
         # plt.imshow(stds.reshape(self.meshgrid_points[0].shape), cmap='terrain', origin='lower')
         
         # plt.scatter(*local_maxima.T, marker='o', color='k')
@@ -523,6 +524,7 @@ class GPytorchAgent(Agent):
         plt.savefig(f'clustering_outputs.png')
         cb.remove()
         grid_evaluations = griddata(test_x, evaluation.loc.max(0)[1].cpu(), (self.meshgrid_points[0], self.meshgrid_points[1]), method='nearest')
+        tasks.image_report(experiment_id=self.experiment_id, matrix=grid_evaluations, name='predictions')
         # plt.imshow(evaluation.loc.max(0)[1].reshape(self.meshgrid_points[0].shape), cmap='terrain', origin='lower')
         plt.scatter(*self.inputs.cpu().numpy().T, marker='.', s=1, c='r')
         plt.imshow(grid_evaluations, cmap='terrain', origin='lower', extent=np.ravel(self.input_bounds))
