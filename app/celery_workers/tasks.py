@@ -342,14 +342,12 @@ def save_data(msg):
         print(f"Recieved Data with field name: {fd.fieldname}")
         # only the first 2d data is used for learning right now
         if fd.fieldname not in data_names:
-            if fd.fieldname == 'time' or fd.fieldname == '':
-                data_names[fd.fieldname] = False
-            elif fd.fieldname not in data_names:
-                if len(fd.dimensions) == 2:
-                    if any(data_names.values()):
-                        data_names[fd.fieldname] = False
-                    else:
-                        data_names[fd.fieldname] = True
+            print(f"{fd.fieldname} has {len(fd.dimensions)} dimensions of shape {fd.dimensions}")
+            if len(fd.dimensions) == 2:
+                if any(data_names.values()):
+                    data_names[fd.fieldname] = False
+                else:
+                    data_names[fd.fieldname] = True
             # data_names[fd.fieldname] = False if fd.fieldname == 'time' or fd.fieldname == '' else True
             
         # if data.message.method == "fake_labview":
