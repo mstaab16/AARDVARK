@@ -126,6 +126,7 @@ class ExperimentWatcher:
                 print(f"Experiment is no longer active. Shutting down...")
                 return
             new_measurements = self.update_data()
+                
             if len(self.data_ids) < 0.75 * num_random_measurements: # len(self.data_ids) < len(boundary_measurements) + num_boundary_measurements * 0.9:
                 print(f"Not enough data to train on {self.experiment_id} | active={experiment_active}")
                 time.sleep(1)
