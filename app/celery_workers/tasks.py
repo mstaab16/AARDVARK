@@ -84,7 +84,7 @@ class ExperimentWatcher:
             print(f"Set up raster grid of {len(measurements)} measurements.")
         else:
             num_to_suggest=25
-            num_random_measurements = 100
+            num_random_measurements = 10
             num_boundary_measurements = 3
 
             startup_decision = Decision(
@@ -192,8 +192,8 @@ class ExperimentWatcher:
 
     def update_data(self):
         print("*"*20)
-        print('Getting all data')
         start = time.perf_counter_ns()
+        print(f'Getting all data with fieldnames: {self.data_names}...')
         # query = self.db.query(Experiment.data_names_to_learn).filter(Experiment.experiment_id == self.experiment_id)
         
         query = self.db.query(Experiment.data_names_to_learn).filter(Experiment.experiment_id == self.experiment_id).first()[0]
