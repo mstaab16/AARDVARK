@@ -144,33 +144,131 @@ class FakeGrapheneCrystal:
     def get_boundaries(self):
         return np.min(self.xcoords), np.max(self.xcoords), np.min(self.ycoords), np.max(self.ycoords)
 
-        
-class FakeWSe2Crystal:
+class FakeRCrystal:
     def __init__(self):
-        from astropy.io import fits
-        self.filename =  r"/mnt/MAESTROdata/nARPES/2016/201612/WS2_hBN_TiO2_sample26/20161215_00045.fits"
-        self.file = fits.open(self.filename)
-        self.data = self.file[1].data['Fixed_Spectra0']
-        self.xcoords = self.file[1].data['Scan Z']
-        self.ycoords = self.file[1].data['Scan Y']
+        import h5py
+        self.filename =  r"/mnt/MAESTROdata/Eli-CAD-3/2024/2024_03/Rotenberg_Eli - 275451/aa/bb/20240308_00865.h5"
+        self.file = h5py.File(self.filename, 'r')
+        print("loading data...")
+        self.data = self.file['2D_Data']['Fixed_Spectra5']
+        print("loading coords...")
+        print(f"{self.file['0D_Data'].keys()}")
+        self.xcoords = self.file['0D_Data']['X'][:]
+        self.ycoords = self.file['0D_Data']['Y'][:]
+        self.xmin, self.xmax, self.ymin, self.ymax = self.get_boundaries()
+        print(f"{len(self.xcoords)=}")
+        self.xdelta = (self.xmax - self.xmin)/100
+        self.ydelta = (self.ymax - self.ymin)/100
 
 
     def measure(self, x, y):
+        print(f"Measuring at {x}, {y}")
         dx = (self.xcoords - x)**2
         dy = (self.ycoords - y)**2
         d = np.sqrt(dx + dy)
         i = np.argmin(d)
         measured_x = self.xcoords[i]
         measured_y = self.ycoords[i]
-        spectrum = self.data[i,:,:]
-        return measured_x, measured_y, spectrum
+        spectrum = self.data[:,:,i]
+        return measured_x, measured_y, spectrum.reshape((spectrum.shape[1], spectrum.shape[0]))
 
     def get_boundaries(self):
         return np.min(self.xcoords), np.max(self.xcoords), np.min(self.ycoords), np.max(self.ycoords)
 
 
+class FakeCoSnSCrystal:
+    def __init__(self):
+        import h5py
+        self.filename =  r"/mnt/MAESTROdata/uARPES/2023/2023_11/Jozwiak_Chris - 008391/Co3Sn2S2/Co3Sn2S2_20231112/20231112_00020.h5"
+        self.file = h5py.File(self.filename, 'r')
+        print("loading data...")
+        # print(self.file['2D_Data'].keys())
+        self.data = self.file['2D_Data']['Swept_Spectra24']
+        print("loading coords...")
+        print(f"{self.file['0D_Data'].keys()}")
+        self.xcoords = self.file['0D_Data']['X'][:]
+        self.ycoords = self.file['0D_Data']['Y'][:]
+        self.xmin, self.xmax, self.ymin, self.ymax = self.get_boundaries()
+        print(f"{len(self.xcoords)=}")
+        self.xdelta = (self.xmax - self.xmin)/20
+        self.ydelta = (self.ymax - self.ymin)/20
+
+
+    def measure(self, x, y):
+        print(f"Measuring at {x}, {y}")
+        dx = (self.xcoords - x)**2
+        dy = (self.ycoords - y)**2
+        d = np.sqrt(dx + dy)
+        i = np.argmin(d)
+        measured_x = self.xcoords[i]
+        measured_y = self.ycoords[i]
+        spectrum = self.data[:,:,i]
+        return measured_x, measured_y, spectrum.reshape((spectrum.shape[1], spectrum.shape[0]))
+
+    def get_boundaries(self):
+        return np.min(self.xcoords), np.max(self.xcoords), np.min(self.ycoords), np.max(self.ycoords)
+
+class Fake4HBTaS2Crystal:
+    def __init__(self):
+        import h5py
+        self.filename =  r"/mnt/MAESTROdata/nARPES/2024/2024_04/Rotenberg_Eli - 275451/4Hb/1-1/20240414_00011.h5"
+        self.file = h5py.File(self.filename, 'r')
+        print("loading data...")
+        self.data = self.file['2D_Data']['Fixed_Spectra3']
+        print("loading coords...")
+        print(self.file['0D_Data'].keys())
+        self.xcoords = self.file['0D_Data']['Sample X'][:]
+        self.ycoords = self.file['0D_Data']['Sample Y'][:]
+        print(len(self.xcoords))
+        self.xmin, self.xmax, self.ymin, self.ymax = self.get_boundaries()
+        print(f"{len(self.xcoords)=}")
+        self.xdelta = (self.xmax - self.xmin)/91
+        self.ydelta = (self.ymax - self.ymin)/91
+
+
+    def measure(self, x, y):
+        print(f"Measuring at {x}, {y}")
+        dx = (self.xcoords - x)**2
+        dy = (self.ycoords - y)**2
+        d = np.sqrt(dx + dy)
+        i = np.argmin(d)
+        measured_x = self.xcoords[i]
+        measured_y = self.ycoords[i]
+        spectrum = self.data[:,:,i]
+        return measured_x, measured_y, spectrum.reshape((spectrum.shape[1], spectrum.shape[0]))
+
+    def get_boundaries(self):
+        return np.min(self.xcoords), np.max(self.xcoords), np.min(self.ycoords), np.max(self.ycoords)
+
+ 
+# class FakeWSe2Crystal:
+#     def __init__(self):
+#         from astropy.io import fits
+#         self.filename =  r"/mnt/MAESTROdata/nARPES/2016/201612/WS2_hBN_TiO2_sample26/20161215_00045.fits"
+#         self.file = fits.open(self.filename)
+#         self.data = self.file[1].data['Fixed_Spectra0']
+#         self.xcoords = self.file[1].data['Scan Z']
+#         self.ycoords = self.file[1].data['Scan Y']
+#         self.xmin, self.xmax, self.ymin, self.ymax = self.get_boundaries()
+#         self.xdelta = (self.xmax - self.xmin)/100
+#         self.ydelta = (self.ymax - self.ymin)/100
+
+#     def measure(self, x, y):
+#         dx = (self.xcoords - x)**2
+#         dy = (self.ycoords - y)**2
+#         d = np.sqrt(dx + dy)
+#         i = np.argmin(d)
+#         measured_x = self.xcoords[i]
+#         measured_y = self.ycoords[i]
+#         spectrum = self.data[i,:,:]
+#         return measured_x, measured_y, spectrum
+
+#     def get_boundaries(self):
+#         return np.min(self.xcoords), np.max(self.xcoords), np.min(self.ycoords), np.max(self.ycoords)
+
+
 def main():
-#     gr = FakeGrapheneCrystal()
+    # t = Fake4HBTaS2Crystal()
 #     xmin, xmax, ymin, ymax = gr.get_boundaries()
 #     start = perf_counter()
 #     for _ in range(10):
@@ -187,7 +285,9 @@ def main():
     #  vor = FakeVoronoiCrystal(num_crystallites=50, num_angles=128, num_energies=128, bounds=[[-10,10], [-10,10]], min_steps=[0.05, 0.05])
     #  vor.plot()
     start = perf_counter()
-    wse2 = FakeGrapheneCrystal()
+    wse2 = Fake4HBTaS2Crystal()
+    # wse2 = FakeRCrystal()
+    # wse2 = FakeCoSnSCrystal()
     end = perf_counter()
     print(f"Time to load: {(end-start):.3f} s")
     xmin, xmax, ymin, ymax = wse2.get_boundaries()

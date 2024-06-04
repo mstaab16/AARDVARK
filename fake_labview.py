@@ -19,18 +19,20 @@ class FakeLV:
 
         self.current_ai_cycle = 0
         self.current_data_cycle = 0
-        self.max_ai_cycle = 500
-        self.measurement_delay = 0.00001
+        self.max_ai_cycle = 1658
+        self.measurement_delay = 0.0001
         self.num_energies = 256
         self.num_angles = 256
         self.dead_time = 0
         self.start_time = time.perf_counter()
         # self.crystal_bounds = [[-1,1], [-1,1]]
         # self.min_steps = [0.01, 0.01]
-        # self.fake_crystal = fake_crystals.FakeVoronoiCrystal(num_crystallites=6, num_angles = self.num_angles, num_energies = self.num_energies,
+        # self.fake_crystal = fake_crystals.FakeVoronoiCrystal(num_crystallites=5, num_angles = self.num_angles, num_energies = self.num_energies,
         #                                        bounds=self.crystal_bounds, min_steps=self.min_steps)
-        self.fake_crystal = fake_crystals.FakeGrapheneCrystal()
-
+        # self.fake_crystal = fake_crystals.FakeGrapheneCrystal()
+        self.fake_crystal = fake_crystals.Fake4HBTaS2Crystal()
+        # self.fake_crystal = fake_crystals.FakeRCrystal()
+        # self.fake_crystal = fake_crystals.FakeCoSnSCrystal()
         self.waiting_times = []
         start = time.perf_counter()
         self.startup()
@@ -161,7 +163,7 @@ class FakeLV:
                             "data dimensions": "string",
                             "dataunitname (if not string)": "arb",
                             "dimensions": [*data.shape],
-                            "fieldname": "Fixed_Spectra5",
+                            "fieldname": "Fixed_Spectra7",
                             "numeric type (if not string)": "B:u8",
                             "scaledelta": [25,500],
                             "scaleoffset": [2.6499999999999999112,104],

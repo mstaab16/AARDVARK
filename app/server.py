@@ -187,8 +187,11 @@ class Server:
         msg = mm.MaestroLVAbortMessage(**msg)
         # Shutdown the experiment
         experiment = self.db.query(Experiment).order_by(Experiment.experiment_id.desc()).first()
+        logging.info("+"*10 + f"Setting experiment {experiment.experiment_id} to {False}" + "+"*10)
         experiment.active = False
         self.db.commit()
+        experiment = self.db.query(Experiment).order_by(Experiment.experiment_id.desc()).first()
+        logging.info("+"*10 + f"Experiment {experiment.experiment_id} activity is now {experiment.active}" + "+"*10)
         logging.info("+"*10 + "SHOULD BE ABORTING NOW" + "+"*10)
         return mm.MaestroLVResponseOK()
 

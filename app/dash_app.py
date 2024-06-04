@@ -3,12 +3,15 @@ import dash
 from dash import dcc, html, dash_table, no_update
 from dash.dependencies import Input, Output, State
 
+from sklearn.metrics import adjusted_mutual_info_score
+
 import plotly.express as px
 import plotly.graph_objects as go
 
 import pandas as pd
 import numpy as np
 from skimage.transform import resize
+import matplotlib.pyplot as plt
 from matplotlib.colors import Normalize, to_rgba
 from matplotlib.cm import ScalarMappable
 import json
@@ -49,6 +52,8 @@ def np_image_to_base64(im_matrix):
     return im_url
 
 app.layout = html.Div([
+    html.Button('Button', id='button', n_clicks=0),
+    dcc.Checklist(id='checklist', options=[{'label': 'Option 1', 'value': '1'}, {'label': 'Option 2', 'value': '2'}], value=['1']),
     html.H4('Experiment id'),
     dcc.Input(id='experiment-id', type='number', value=1, required=True), 
     # html.H4('Spectrum bin factor for displaying faster'),
@@ -60,8 +65,73 @@ app.layout = html.Div([
     html.Div(dcc.Graph(id="scatter-plot"), style={'width': '33%', 'display': 'inline-block'}),
     html.Div(dcc.Graph(id="report"), style={'width': '33%', 'display': 'inline-block'}),
     html.Div(dcc.Graph(id="image"), style={'width': '33%', 'display': 'inline-block'}),
+    dcc.Interval(id='interval-component', interval=1*1000, n_intervals=0),
     ]),
 ])
+
+@app.callback(Output('button', 'children'),
+              Input('button', 'n_clicks'),
+              Input('experiment-id', 'value'),
+              Input('report-type', 'value'),
+              Input('n-clusters', 'value'),
+              prevent_initial_call=True,
+              )
+def compute(n_clicks, experiment_id, report_name, n):
+    if n != 42:
+        print("NOT THE MAGIC NUMBER (42)")
+        return no_update
+    print("*"*20 + "THE COMPUTE IS RUNNING" + "*"*20)
+    db_gen = get_db()
+    db = next(db_gen)
+    query = db.query(Measurement).filter(Measurement.experiment_id == experiment_id, Measurement.measured == True).order_by(Measurement.ai_cycle)
+    df = pd.read_sql(query.statement, query.session.bind)
+    positions = pd.json_normalize(df['positions'])
+    x = positions['motors::X']
+    y = positions['motors::Y']
+
+    query = db.query(Report.data['image'], Report.data['n_measured']).filter(Report.experiment_id == experiment_id, Report.name == report_name).order_by(Report.report_id.desc()).all()
+    for i in range(len(query)):
+        img = np.asarray(query[i][0], dtype=np.uint8)
+        n_measured = query[i][1]
+        print(f"Image {i} shape: {img.shape} and n_measured: {n_measured}. Min: {img.min()} Max: {img.max()}")
+        plt.imshow(img, origin='lower', extent=[x.min()-0.6, x.max(), y.min()-0.6, y.max()])
+        plt.scatter(x[:n_measured], y[:n_measured], c='k', s=1, alpha=0.5)
+        plt.axis('off')
+        plt.savefig(f'save/imgs/{experiment_id}_{report_name}_{n_measured}_{i}.png', bbox_inches='tight')
+        plt.clf()
+        
+    print(len(query))
+
+    print("*"*20 + "THE COMPUTE IS DONE" + "*"*20)
+    return n_clicks
+
+# @app.callback(Output('checklist', 'options'),
+#         Output('checklist', 'value'),
+#         Input('experiment-id', 'value'),
+#         Input('button', 'n_clicks'),
+#         )
+# def on_button_click(experiment_id, n_clicks):
+#     print("-"*80)
+#     db_gen = get_db()
+#     db = next(db_gen)
+#     query = json.loads(db.query(Experiment.data_names_to_learn).filter(Experiment.experiment_id == experiment_id).first()[0])
+#     print(query)
+#     # if query[0] is None:
+#     #     query = db.query(Data.fieldname).filter(Data.experiment_id == experiment_id).distinct().all()
+#     #     data_names = db.query(Experiment.data_names_to_learn).filter(Experiment.experiment_id == experiment_id)
+#     #     data_names = json.dumps({query[0][0]: True})
+#     #     db.query(Experiment).filter(Experiment.experiment_id == experiment_id).update({Experiment.data_names_to_learn: data_names})
+#     #     db.commit()
+#     # print(query[0][0])
+#     options = []
+#     value = []
+#     for k, v in query.items():
+#         options.append(
+#             {'label': k, 'value': k},
+#         )
+#         if v:
+#             value.append(k)
+#     return options, value
 
 @app.callback(Output('image', 'figure'),
               Input("scatter-plot", "clickData"),
@@ -78,6 +148,8 @@ def update_figure(clickData, figure):
     
     db_gen = get_db()
     db = next(db_gen)
+    query = db.query(Experiment.experiment_id).order_by(Experiment.experiment_id.desc()).first()
+    print(f"Experiment ID: {query.experiment_id}")
     query = db.query(Data.data, Data.data_info).filter(Data.measurement_id == measurement_id, Data.fieldname == "Fixed_Spectra5").order_by(Data.measurement_id.desc()).first()
     if query is None:
         return no_update
@@ -98,36 +170,58 @@ def update_figure(clickData, figure):
 
 @app.callback(Output('report', 'figure'),
             #   Input('interval-component', 'n_intervals'),
+              Input('button', 'n_clicks'),
               Input('experiment-id', 'value'),
               Input('report-type', 'value'),
             #   Input("scatter-plot", "hoverData"),
             )
-def update_report(experiment_id, report_type):
+def update_report(n, experiment_id, report_type):
     start = time.perf_counter_ns()
     db_gen = get_db()
     db = next(db_gen)
-    query = db.query(Report.data['image']).filter(Report.experiment_id == experiment_id, Report.name == report_type).order_by(Report.report_id.desc()).first()
+    # query = db.query(Report).filter(Report.experiment_id == experiment_id).all()
+    if report_type is None:
+        query = db.query(Report.data['image'], Report.data['n_measured']).filter(Report.experiment_id == experiment_id).order_by(Report.report_id.desc()).first()
+    else:
+        query = db.query(Report.data['image'], Report.data['n_measured']).filter(Report.experiment_id == experiment_id, Report.name == report_type).order_by(Report.report_id.desc()).first()
+    print(f"Took {(time.perf_counter_ns()-start)/1e6:.02f}ms to query report for image EXPERIMENT ID {experiment_id}.")
+    # print(query)
     if query is None:
+        print("Not updating figure")
         return no_update
-    image = query[0]
-    figure = px.imshow(image, origin='lower', color_continuous_scale='Viridis')
+    image = np.asarray(query[0])
+
+    # print(query)
+    if len(image.shape) == 2:
+        print('2D image')
+        figure = px.imshow(image, origin='lower', color_continuous_scale='Viridis', title=f"Number of points: {query[1]}")
+    elif len(image.shape) == 3:
+        print('3D image')
+        figure = px.imshow(image, origin='lower', title=f"Number of points: {query[1]}")
+    # print(f"Took {(time.perf_counter_ns()-start)/1e6:.02f}ms to get image.")
+    # figure = px.imshow(image, origin='lower', title=f"Number of points: {query[1]}")
+    # print(f"Took {(time.perf_counter_ns()-start)/1e6:.02f}ms to make figure.")
+    # else:
+    #     return no_update
     print(f"Dash took {(time.perf_counter_ns()-start)/1e6:.02f}ms to update report.")
     return figure
 
 @app.callback(Output('report-type', 'options'),
               Output('report-type', 'value'),
             #   Input('interval-component', 'n_intervals'),
+              Input('button', 'n_clicks'),
               Input('report-type', 'value'),
               Input('experiment-id', 'value'),
             #   Input("scatter-plot", "hoverData"),
             )
-def update_report(current_report_type, experiment_id):
+def update_report(n, current_report_type, experiment_id):
     start = time.perf_counter_ns()
     db_gen = get_db()
     db = next(db_gen)
-    query = db.query(Report.name).filter(Report.experiment_id == experiment_id, Report.data.has_key('image')).distinct()
+    query = db.query(Report.name).filter(Report.experiment_id == experiment_id).distinct()
     if query is None:
         return no_update
+    print(f"Took {(time.perf_counter_ns()-start)/1e6:.02f}ms to query.")
     options = np.ravel(query.all())
     # figure = px.imshow(query.data['image'], origin='lower', color_continuous_scale='Turbo')
     print(f"Dash took {(time.perf_counter_ns()-start)/1e6:.02f}ms to update report-type options.")
@@ -138,11 +232,11 @@ def update_report(current_report_type, experiment_id):
 
 @app.callback(
     Output("scatter-plot", "figure"), 
-    # Input('interval-component', 'n_intervals'),
+    Input('interval-component', 'n_intervals'),
     Input('experiment-id', 'value'),
     Input('n-clusters', 'value'),
 )
-def update_scatter_plot(experiment_id, n_clusters):
+def update_scatter_plot(n, experiment_id, n_clusters):
     try:
         db_gen = get_db()
         db = next(db_gen)

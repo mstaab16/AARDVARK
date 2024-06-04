@@ -12,6 +12,8 @@ class Experiment(Base):
     motors = Column(JSONB)
     data_filepath = Column(String, default="")
     active = Column(Boolean, default=True)
+    data_names_to_learn = Column(JSONB) # {"data_name_0": False, "data_name_1": True, ...}
+
 
     measurements = relationship("Measurement", back_populates="experiment")
     data = relationship("Data", back_populates="experiment")

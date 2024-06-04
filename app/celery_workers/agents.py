@@ -11,8 +11,8 @@ from scipy.ndimage import gaussian_filter
 from scipy.optimize import minimize, basinhopping
 
 from . import tasks
+from .celery_app import app
 import matplotlib.pyplot as plt
-
 
 from typing import Callable, Dict, Iterable, List, Literal, Optional, Sequence, Tuple, TypedDict, Union
 from numpy.typing import ArrayLike
@@ -292,6 +292,7 @@ class KMeansAgent(Agent):
         self.kwargs = kwargs
         self.n_clusters = kwargs['n_clusters']
         self.experiment_id = kwargs.get('experiment_id')
+        self.KMeans = None
 
     def tell(self, x, y):
         print(f"KMeansAgent told about new data: {x.shape=}, {y.shape=}")
@@ -304,10 +305,8 @@ class KMeansAgent(Agent):
             self.KMeans.fit(y.astype(np.float32))
             self.labels = self.KMeans.labels_
             new_y = self.labels
-
-        #     new_y = np.zeros((len(self.KMeans.labels_), self.kwargs.get('n_clusters')))
-        #     for i, label in enumerate(self.KMeans.labels_):
-        #         new_y[i,label] = 1
+        self.x = x
+        self.y = new_y
         end = time.perf_counter_ns()
         print(f"KMeans took {(end-start)/1e6:.02f}ms to fit.")
         return x, new_y
@@ -317,22 +316,535 @@ class KMeansAgent(Agent):
     
     def tell_many(self, x, y):
         raise NotImplementedError
+    
+    def report(self, meshgrid):
+        print("Reporting KMeansAgent")
+        if self.KMeans is None:
+            print("No KMeans model to report")
+            return
+        
+        label_grid = griddata(self.x, self.y, (meshgrid[0], meshgrid[1]), method='nearest')
+        # tasks.image_report(experiment_id=self.experiment_id, matrix=label_grid, name='kmeans_labels', extra_data = dict(n_measured=self.n_clusters))
+        tasks.image_report(experiment_id=self.experiment_id, 
+                            matrix=label_grid, name='kmeans_labels',
+                            extra_data = dict(n_measured=len(self.y)),
+                            )
 
 
-# class MultitaskGPModel(gpytorch.models.ExactGP):
-#     def __init__(self, train_x, train_y, likelihood):
-#         super(MultitaskGPModel, self).__init__(train_x, train_y, likelihood)
-#         self.mean_module = gpytorch.means.MultitaskMean(
-#             gpytorch.means.ConstantMean(), num_tasks=train_y.shape[1]
-#         )
-#         self.covar_module = gpytorch.kernels.MultitaskKernel(
-#             gpytorch.kernels.RBFKernel(), num_tasks=train_y.shape[1], rank=1
-#         )
+from torch import nn
+class VAE(nn.Module):
+    def __init__(self, input_dim, hidden_dim=1000, latent_dim=3, device='cuda'):
+        super(VAE, self).__init__()
+        self.device = device
+        # encoder
+        self.encoder = nn.Sequential(
+            nn.Linear(input_dim, hidden_dim),
+            nn.LeakyReLU(0.2),
+            nn.Linear(hidden_dim, latent_dim),
+            nn.LeakyReLU(0.2)
+            )
+        
+        # latent mean and variance 
+        self.mean_layer = nn.Linear(latent_dim, 2)
+        self.logvar_layer = nn.Linear(latent_dim, 2)
 
-#     def forward(self, x):
-#         mean_x = self.mean_module(x)
-#         covar_x = self.covar_module(x)
-#         return gpytorch.distributions.MultitaskMultivariateNormal(mean_x, covar_x)
+        self.mean_var_decoder = nn.Sequential(
+            nn.Linear(2, latent_dim),
+            nn.LeakyReLU(0.2),
+        )
+
+        # decoder
+        self.decoder = nn.Sequential(
+            nn.Linear(latent_dim, hidden_dim),
+            nn.LeakyReLU(0.2),
+            nn.Linear(hidden_dim, input_dim),
+            nn.Sigmoid()
+            )
+     
+    def encode(self, x):
+        x = self.encoder(x)
+        mean, logvar = self.mean_layer(x), self.logvar_layer(x)
+        return mean, logvar
+
+    def reparameterization(self, mean, var):
+        epsilon = torch.randn_like(var).to(self.device)      
+        z = mean + var*epsilon
+        return z
+
+    def decode(self, x):
+        x = self.mean_var_decoder(x)
+        return self.decoder(x)
+
+    def forward(self, x):
+        # print(f"VAE forward: {x.shape=}")
+        mean, logvar = self.encode(x)
+        z = self.reparameterization(mean, logvar)
+        x_hat = self.decode(z)
+        return x_hat, mean, logvar
+
+
+def vae_loss(x, x_hat, mean, log_var):
+    # reproduction_loss = nn.functional.binary_cross_entropy(x_hat, x, reduction='sum')
+    reproduction_loss = nn.functional.mse_loss(x_hat, x, reduction='mean')
+    KLD = - 0.5 * torch.sum(1+ log_var - mean.pow(2) - log_var.exp())
+    return reproduction_loss + KLD
+
+
+class DKLModel(gpytorch.models.ExactGP):
+        
+        def __init__(self, train_x, train_y, likelihood):
+            super(DKLModel, self).__init__(train_x, train_y, likelihood)
+            self.mean_module = gpytorch.means.MultitaskMean(
+                gpytorch.means.ConstantMean(), num_tasks=train_y.shape[-1]
+            )
+            self.covar_module = gpytorch.kernels.MultitaskKernel(
+                gpytorch.kernels.RBFKernel(), num_tasks=train_y.shape[-1], rank=1
+            )
+
+        def forward(self, x):
+            mean_x = self.mean_module(x)
+            covar_x = self.covar_module(x)
+            return gpytorch.distributions.MultitaskMultivariateNormal(mean_x, covar_x)
+
+
+class DKLAgent_old(Agent):
+    def __init__(self, input_bounds, input_min_spacings, experiment_id):
+        print("Creating Classification GP Agent")
+        self.input_bounds = input_bounds
+        self.input_min_spacings = input_min_spacings
+        self.inputs=None
+        self.targets=None
+        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        print("THE DEVICE BEING USED IS: ", self.device)
+        p = [np.arange(low, high, delta) for (low, high), delta in zip(self.input_bounds, self.input_min_spacings)]
+        # p = [np.linspace(low, high, 128) for (low, high) in self.input_bounds]
+        self.meshgrid_points = np.meshgrid(*p)
+        self.plotting_positions = torch.stack([torch.tensor(arr.flatten(),dtype=torch.float32).to(self.device) for arr in self.meshgrid_points],dim=1)
+        p = [np.linspace(low, high, 4) for (low, high) in self.input_bounds]
+        self.scipy_meshgrid = np.meshgrid(*p)
+        self.optimize_positions = torch.stack([torch.tensor(arr.flatten(),dtype=torch.float32).to(self.device) for arr in self.scipy_meshgrid],dim=1)
+        self.experiment_id = experiment_id
+
+    def tell(self, x, y):
+        print(f"GPytorchAgent told about new data: {x.shape=}, {y.shape=}")
+        if True:
+            self.inputs = torch.atleast_2d(torch.tensor(x, device=self.device, dtype=torch.float32))
+            self.targets = torch.atleast_1d(torch.tensor(y, device=self.device, dtype=torch.float32))
+        start = time.perf_counter_ns()
+        self.fit()
+        end = time.perf_counter_ns()
+        print(f"GP took {(end-start)/1e6:.02f}ms to fit.")
+        return x, y
+
+    def fit(self):# model, likelihood, train_x, train_y):
+        train_x = self.inputs
+        train_y = self.targets
+        # normalize train_y to be -1 to 1
+        train_y = (train_y - train_y.mean()) / train_y.std()
+        training_iterations = 50
+
+        print("Fitting VAE")
+        vae = VAE(input_dim=train_y.shape[1], hidden_dim=1000, latent_dim=3, device=self.device).to(self.device)
+        optimizer = torch.optim.Adam(vae.parameters(), lr=1e-8)
+        vae.train()
+        for i in range(training_iterations):
+            optimizer.zero_grad()
+            # print(f"train_y.shape={train_y.shape}, train_y.dtype={train_y.dtype}")
+            x_hat, mean, logvar = vae(train_y)
+            # print(f"{x_hat.shape=}, {mean.shape=}, {logvar.shape=}")
+            # print(f"{x_hat.mean()}")
+            # print(f"{mean.mean()}")
+            # print(f"{logvar.mean()}")
+            loss = vae_loss(train_y, x_hat, mean, logvar)
+            loss.backward()
+            optimizer.step()
+            # print(f'Epoch {epoch+1}, Loss: {loss.item():.4f}')
+            print('Iter %d/%d - Loss: %.3f' % (i + 1, training_iterations, loss.item()))
+        vae.eval()
+        self.vae = vae
+        optimizer = None
+
+        print("VAE fitted")
+    
+        print("Fitting GP")
+        encoded_y = self.vae.encode(train_y)[0].detach().clone()
+        print(f"{encoded_y.shape=}")
+
+        # likelihood = DirichletClassificationLikelihood(train_y, learn_additional_noise=False)
+        likelihood = gpytorch.likelihoods.MultitaskGaussianLikelihood(num_tasks=encoded_y.shape[-1])
+        model = DKLModel(train_x, encoded_y, likelihood)
+
+        model.to(self.device)
+        likelihood.to(self.device)
+
+        # Find optimal model hyperparameters
+        model.train()
+        likelihood.train()
+
+        # Use the adam optimizer
+        optimizer = torch.optim.Adam(model.parameters(), lr=0.1)  # Includes GaussianLikelihood parameters
+
+        # "Loss" for GPs - the marginal log likelihood
+        mll = gpytorch.mlls.ExactMarginalLogLikelihood(likelihood, model)
+        
+        
+        print("Training GP")
+        for i in range(training_iterations):
+            optimizer.zero_grad()
+            output = model(train_x)
+            loss = -mll(output, encoded_y)
+
+            loss.backward()
+            print('Iter %d/%d - Loss: %.3f' % (i + 1, training_iterations, loss.item()))
+            optimizer.step()
+
+        model.eval()
+        likelihood.eval()
+
+        with torch.no_grad(), gpytorch.settings.fast_pred_var():# , gpytorch.settings.max_root_decomposition_size(100):
+            self.model = model
+            self.likelihood = likelihood
+
+    # def find_next_position()
+
+    def ask(self, batch_size):
+        print("Sampling...")
+        max_n_samples = 10_000
+        if len(self.plotting_positions) > max_n_samples:
+            test_x = self.plotting_positions[np.random.choice(len(self.plotting_positions), max_n_samples)]
+        else:
+            test_x = self.plotting_positions
+        
+        print(f"Evaluating model on {len(test_x)} positons...")
+        evaluation = self.model(test_x)
+        # evaluation.sample(torch.Size((256,)))
+        test_x = test_x.detach().cpu().numpy()
+        # preds = evaluation.mean.detach().cpu().numpy()
+        # preds = self.vae.decode(test_x).detach().cpu().numpy()
+        # stds = evaluation.stddev.sum(0).detach().cpu().numpy()
+        # print(f'{preds.shape=}')
+        means_and_variances = evaluation.mean.detach()#.cpu().numpy()
+        means = self.vae.mean_var_decoder(means_and_variances).detach().cpu().numpy()
+        print(f'{means.shape=}')
+        print(means)
+        stds = evaluation.stddev[:,0].detach().cpu().numpy()
+        # stds_all = self.likelihood(evaluation).loc.detach().cpu().numpy()
+        # stds = stds_all.prod(axis=0)
+        # pred_samples = evaluation.sample(torch.Size((256,))).exp()
+        # info = (pred_samples / pred_samples.sum(-2, keepdim=True))
+        # probabilities = info.mean(0).detach().cpu().numpy()
+        # stds = info.std(0)
+        # stds /= stds.sum(len(stds.shape[1:]), keepdim=True)
+        # # stds = stds.pow(2)
+        # # # The stds here actually represent the uncertainty on the proabbility of each label.
+        # stds = stds.sum(0).detach().cpu().numpy()
+        # stds = stds.sum(0).detach().cpu().numpy()
+        # partial = tasks.plot_griddata.s(xs=test_x, ys=np.copy(stds))
+        grid_stds = griddata(test_x, stds, (self.meshgrid_points[0], self.meshgrid_points[1]), method='nearest')
+        tasks.image_report(experiment_id=self.experiment_id, 
+                            matrix=grid_stds, name='uncertainties',
+                            extra_data = dict(n_measured=len(self.inputs)),
+                            )
+        grid_0 = griddata(test_x, means[:,0], (self.meshgrid_points[0], self.meshgrid_points[1]), method='nearest')
+        tasks.image_report(experiment_id=self.experiment_id, 
+                            matrix=grid_0, name='vae_0',
+                            extra_data = dict(n_measured=len(self.inputs)),
+                            )
+        grid_1 = griddata(test_x, means[:,1], (self.meshgrid_points[0], self.meshgrid_points[1]), method='nearest')
+        tasks.image_report(experiment_id=self.experiment_id, 
+                            matrix=grid_1, name='vae_1',
+                            extra_data = dict(n_measured=len(self.inputs)),
+                            )
+        grid_2 = griddata(test_x, means[:,2], (self.meshgrid_points[0], self.meshgrid_points[1]), method='nearest')
+        tasks.image_report(experiment_id=self.experiment_id, 
+                            matrix=grid_2, name='vae_2',
+                            extra_data = dict(n_measured=len(self.inputs)),
+                            )
+        # plt.imshow(stds.reshape(self.meshgrid_points[0].shape), cmap='terrain', origin='lower')
+        
+        # plt.scatter(*local_maxima.T, marker='o', color='k')
+        # plt.imshow(grid_stds, cmap='terrain', origin='lower', extent=np.ravel(self.input_bounds))
+        # cb = plt.colorbar() 
+
+        # # stds_all = stds_all.detach().cpu().numpy()
+        # # probability = stds
+        # # means = evaluation.mean.detach().cpu().numpy()
+        # # stds = stds**3
+        choice_indices = np.argsort(stds.flatten())
+        num_most_uncertain_to_measure_first = batch_size
+        most_uncertain_indices = choice_indices[-num_most_uncertain_to_measure_first:][::-1]
+        p = stds[:-num_most_uncertain_to_measure_first]
+        if p.sum()!=0:
+            p /= p.sum()
+            probabalistic_indices = np.random.choice(choice_indices[:-num_most_uncertain_to_measure_first], 
+                                                size=batch_size-num_most_uncertain_to_measure_first,
+                                                replace=False,
+                                                p=p)
+            selected_indices =  np.concatenate([most_uncertain_indices, probabalistic_indices])
+        else:
+            selected_indices = choice_indices[-batch_size:][::-1]
+        # most_uncertain_indices = np.argsort(stds.flatten())
+        # next_positions = list(self.all_possible_positions[most_uncertain_indices[-batch_size:]].detach().cpu().numpy())
+        
+        next_positions = test_x[selected_indices]
+        # # plt.scatter(*next_positions.T, marker='x', color='r')
+        # partial.apply_async(args=[], kwargs=dict(grid_points=self.meshgrid_points,\
+        #                     scatter_xs=next_positions.T[0],\
+        #                     scatter_ys=next_positions.T[1],\
+        #                     bounds=self.input_bounds,\
+        #                     filename='stds.png'))
+        # # plt.savefig(f'stds.png')
+        # # plt.clf()
+        # print("Next positions selected...")
+        # print("Plotting")
+        # grid_inputs = griddata(self.inputs.cpu(), self.targets.cpu(), (self.meshgrid_points[0], self.meshgrid_points[1]), method='nearest')
+        # # plt.imshow(evaluation.loc.max(0)[1].reshape(self.meshgrid_points[0].shape), cmap='terrain', origin='lower')
+        # plt.imshow(grid_inputs, cmap='terrain', origin='lower')
+        # cb = plt.colorbar() 
+        # plt.savefig(f'clustering_outputs.png')
+        # cb.remove()
+        # grid_evaluations = griddata(test_x, evaluation.loc.max(0)[1].cpu(), (self.meshgrid_points[0], self.meshgrid_points[1]), method='nearest')
+        # tasks.image_report(experiment_id=self.experiment_id,
+        #                    matrix=grid_evaluations, name='predictions',
+        #                    extra_data = dict(n_measured=len(self.inputs))
+        #                 )
+        # # plt.imshow(evaluation.loc.max(0)[1].reshape(self.meshgrid_points[0].shape), cmap='terrain', origin='lower')
+        # plt.scatter(*self.inputs.cpu().numpy().T, marker='.', s=1, c='r')
+        # plt.imshow(grid_evaluations, cmap='terrain', origin='lower', extent=np.ravel(self.input_bounds))
+        # cb = plt.colorbar() 
+        # plt.savefig(f'predictions.png')
+        # plt.clf()
+        return next_positions
+
+
+    
+    def tell_many(self, x, y):
+        raise NotImplementedError
+    
+
+class DKLAgent(Agent):
+    def __init__(self, input_bounds, input_min_spacings, experiment_id):
+        print("Creating Classification GP Agent")
+        self.input_bounds = input_bounds
+        self.input_min_spacings = input_min_spacings
+        self.inputs=None
+        self.targets=None
+        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        print("THE DEVICE BEING USED IS: ", self.device)
+        p = [np.arange(low, high, delta) for (low, high), delta in zip(self.input_bounds, self.input_min_spacings)]
+        # p = [np.linspace(low, high, 128) for (low, high) in self.input_bounds]
+        self.meshgrid_points = np.meshgrid(*p)
+        self.plotting_positions = torch.stack([torch.tensor(arr.flatten(),dtype=torch.float32).to(self.device) for arr in self.meshgrid_points],dim=1)
+        p = [np.linspace(low, high, 4) for (low, high) in self.input_bounds]
+        self.scipy_meshgrid = np.meshgrid(*p)
+        self.optimize_positions = torch.stack([torch.tensor(arr.flatten(),dtype=torch.float32).to(self.device) for arr in self.scipy_meshgrid],dim=1)
+        self.experiment_id = experiment_id
+
+    def tell(self, x, y):
+        print(f"GPytorchAgent told about new data: {x.shape=}, {y.shape=}")
+        if True:
+            self.inputs = torch.atleast_2d(torch.tensor(x, device=self.device, dtype=torch.float32))
+            self.targets = torch.atleast_1d(torch.tensor(y, device=self.device, dtype=torch.float32))
+        start = time.perf_counter_ns()
+        self.fit()
+        end = time.perf_counter_ns()
+        print(f"GP took {(end-start)/1e6:.02f}ms to fit.")
+        return x, y
+
+    def fit(self):# model, likelihood, train_x, train_y):
+        train_x = self.inputs
+        train_y = self.targets
+        # train_y = (train_y - train_y.mean()) / train_y.std()
+        training_iterations = 100
+
+        print("Fitting UMAP")
+        umap_model = UMAP(n_components=3)
+        encoded_y = umap_model.fit(train_y).transform(train_y)
+        encoded_y = torch.as_tensor(encoded_y, device=self.device)#, dtype=torch.float32)
+        print(f"UMAP fitted: {type(encoded_y)}")
+    
+        print("Fitting GP")
+        # encoded_y = self.vae.encode(train_y)[0].detach().clone()
+        print(f"{encoded_y.shape=}")
+
+        # likelihood = DirichletClassificationLikelihood(train_y, learn_additional_noise=False)
+        likelihood = gpytorch.likelihoods.MultitaskGaussianLikelihood(num_tasks=encoded_y.shape[-1])
+        model = DKLModel(train_x, encoded_y, likelihood)
+        print(model)
+        model.to(self.device)
+        likelihood.to(self.device)
+
+        # Find optimal model hyperparameters
+        model.train()
+        likelihood.train()
+
+        # Use the adam optimizer
+        optimizer = torch.optim.Adam(model.parameters(), lr=0.1)  # Includes GaussianLikelihood parameters
+
+        # "Loss" for GPs - the marginal log likelihood
+        mll = gpytorch.mlls.ExactMarginalLogLikelihood(likelihood, model)
+        
+        
+        print("Training GP")
+        for i in range(training_iterations):
+            optimizer.zero_grad()
+            output = model(train_x)
+            loss = -mll(output, encoded_y)
+
+            loss.backward()
+            print('Iter %d/%d - Loss: %.3f' % (i + 1, training_iterations, loss.item()))
+            optimizer.step()
+
+        model.eval()
+        likelihood.eval()
+
+        with torch.no_grad(), gpytorch.settings.fast_pred_var():# , gpytorch.settings.max_root_decomposition_size(100):
+            self.model = model
+            self.likelihood = likelihood
+
+    # def find_next_position()
+
+    def ask(self, batch_size):
+        print("Sampling...")
+        max_n_samples = 10_000
+        if len(self.plotting_positions) >= max_n_samples:
+            test_x = self.plotting_positions[np.random.choice(len(self.plotting_positions), max_n_samples)]
+        else:
+            test_x = self.plotting_positions
+        
+        print(f"Evaluating model on {len(test_x)} positons...")
+        evaluation = self.likelihood(self.model(test_x))
+        # evaluation.sample(torch.Size((256,)))
+        test_x = test_x.detach().cpu().numpy()
+        # preds = evaluation.mean.detach().cpu().numpy()
+        # preds = self.vae.decode(test_x).detach().cpu().numpy()
+        # stds = evaluation.stddev.sum(0).detach().cpu().numpy()
+        # print(f'{preds.shape=}')
+        # means_and_variances = evaluation.mean.detach()#.cpu().numpy()
+        # means = self.vae.mean_var_decoder(means_and_variances).detach().cpu().numpy()
+        means = evaluation.mean.detach().cpu().numpy()
+        print(f'{means.shape=}')
+        # print(means)
+        stds = evaluation.stddev
+        stds -= stds.min(axis=0, keepdim=True).values
+        stds /= stds.max(axis=0, keepdim=True).values
+        stds = stds.sum(axis=1).detach().cpu().numpy()
+        # stds = stds/std_std
+        # stds = 
+
+        # stds = evaluation.stddev.sum(axis=1).detach().cpu().numpy()
+        # stds_all = self.likelihood(evaluation).loc.detach().cpu().numpy()
+        # stds = stds_all.prod(axis=0)
+        # pred_samples = evaluation.sample(torch.Size((256,))).exp()
+        # info = (pred_samples / pred_samples.sum(-2, keepdim=True))
+        # probabilities = info.mean(0).detach().cpu().numpy()
+        # stds = info.std(0)
+        # stds /= stds.sum(len(stds.shape[1:]), keepdim=True)
+        # # stds = stds.pow(2)
+        # # # The stds here actually represent the uncertainty on the proabbility of each label.
+        # stds = stds.sum(0).detach().cpu().numpy()
+        # stds = stds.sum(0).detach().cpu().numpy()
+        # partial = tasks.plot_griddata.s(xs=test_x, ys=np.copy(stds))
+        xi = (self.meshgrid_points[0], self.meshgrid_points[1])
+        method = 'nearest'
+        # grid_stds = griddata(test_x, stds, (self.meshgrid_points[0], self.meshgrid_points[1]), method='linear')
+        app.send_task("celery_workers.tasks.image_report", args=(
+                            self.experiment_id,
+                            'Uncertainties',
+                            test_x,
+                            stds,
+                            xi,
+                            method,
+                            dict(n_measured=len(self.inputs)),
+                            ))
+        # grid_0 = griddata(test_x, means[:,0], (self.meshgrid_points[0], self.meshgrid_points[1]), method='linear')
+        app.send_task("celery_workers.tasks.image_report", args=(
+                            self.experiment_id,
+                            'UMAP x',
+                            test_x,
+                            means[:,0],
+                            xi,
+                            method,
+                            dict(n_measured=len(self.inputs)),
+                            ))
+        # grid_1 = griddata(test_x, means[:,1], (self.meshgrid_points[0], self.meshgrid_points[1]), method='linear')
+        app.send_task("celery_workers.tasks.image_report", args=(
+                            self.experiment_id,
+                            'UMAP y',
+                            test_x,
+                            means[:,1],
+                            xi,
+                            method,
+                            dict(n_measured=len(self.inputs)),
+                            ))
+        # grid_2 = griddata(test_x, means[:,2], (self.meshgrid_points[0], self.meshgrid_points[1]), method='linear')
+        app.send_task("celery_workers.tasks.image_report", args=(
+                            self.experiment_id,
+                            'UMAP z',
+                            test_x,
+                            means[:,2],
+                            xi,
+                            method,
+                            dict(n_measured=len(self.inputs)),
+                            ))
+        scaled_means = (255 * (means - means.min(axis=0)[np.newaxis, ...]) / (means.max(axis=0)[np.newaxis, ...] - means.min(axis=0)[np.newaxis, ...])).astype(np.uint8)
+        print(f"Scaled means shape={scaled_means.shape}")
+        # grid_rgb = griddata(test_x, scaled_means, (self.meshgrid_points[0], self.meshgrid_points[1]), method='linear')
+        # app.tasks.image_report(experiment_id=self.experiment_id,
+        app.send_task("celery_workers.tasks.image_report", args=(
+                            self.experiment_id,
+                            'UMAP as RGB',
+                            test_x,
+                            scaled_means,
+                            xi,
+                            method,
+                            dict(n_measured=len(self.inputs)),
+                            ))
+        # tasks.image_report(experiment_id=self.experiment_id, 
+                            # name='rgb',
+                            # points=test_x,
+                            # values=scaled_means,
+                            # xi=xi,
+                            # method=method,
+                            # extra_data = dict(n_measured=len(self.inputs)),
+                            # )
+        high_stds = stds
+        # high_stds = np.clip(stds, np.percentile(stds, 90), None)
+        # if len(high_stds) < batch_size:
+        #     high_stds = np.clip(stds, np.percentile(stds, 50), None)
+        # high_stds[high_stds == high_stds.min()] = 0
+        # app.send_task("celery_workers.tasks.image_report", args=(
+        #                     self.experiment_id,
+        #                     'Clipped Uncertainties',
+        #                     test_x,
+        #                     high_stds,
+        #                     xi,
+        #                     method,
+        #                     dict(n_measured=len(self.inputs)),
+        #                     ))
+        choice_indices = np.argsort(high_stds.flatten())
+
+        num_most_uncertain_to_measure_first = 1
+        most_uncertain_indices = choice_indices[-num_most_uncertain_to_measure_first:][::-1]
+        p = high_stds[:-num_most_uncertain_to_measure_first]
+        if p.sum()!=0:
+            p /= p.sum()
+            probabalistic_indices = np.random.choice(choice_indices[:-num_most_uncertain_to_measure_first], 
+                                                size=batch_size-num_most_uncertain_to_measure_first,
+                                                replace=False,
+                                                p=p)
+            selected_indices =  np.concatenate([most_uncertain_indices, probabalistic_indices])
+        else:
+            selected_indices = choice_indices[-batch_size:][::-1]
+        next_positions = test_x[selected_indices]
+        return next_positions
+
+
+    
+    def tell_many(self, x, y):
+        raise NotImplementedError
+
+
 class DirichletGPModel(ExactGP):
     def __init__(self, train_x, train_y, likelihood, num_classes):
         super(DirichletGPModel, self).__init__(train_x, train_y, likelihood)
@@ -348,10 +860,8 @@ class DirichletGPModel(ExactGP):
         return gpytorch.distributions.MultivariateNormal(mean_x, covar_x)
 
 class GPytorchAgent(Agent):
-    """A simple naive agent that cycles samples sequentially in environment space"""
-
     def __init__(self, input_bounds, input_min_spacings, experiment_id):
-        print("Creating GPytorchAgent")
+        print("Creating Classification GP Agent")
         self.input_bounds = input_bounds
         self.input_min_spacings = input_min_spacings
         self.inputs=None
@@ -411,7 +921,7 @@ class GPytorchAgent(Agent):
         # "Loss" for GPs - the marginal log likelihood
         mll = gpytorch.mlls.ExactMarginalLogLikelihood(likelihood, model)
         
-        training_iterations = 100
+        training_iterations = 50
         print("Training GP")
         for i in range(training_iterations):
         # iterator = tqdm.tqdm(range(training_iterations))
@@ -434,28 +944,6 @@ class GPytorchAgent(Agent):
     # def find_next_position()
 
     def ask(self, batch_size):
-
-        # fit = basinhopping(minimize_func, np.array([0.5, 0.5]), minimizer_kwargs=dict(bounds=self.input_bounds, method='L-BFGS-B', args=(self.model, self.device)))
-        # score = fit.fun
-        # local_maxima = np.array([fit.x])
-        # print(f"Most uncertain found: {fit.x} | {score}")
-        # local_maxima = []
-        # scores = []
-        # for x0 in self.optimize_positions:
-        #     # print(f"{local_maxima=}")
-        #     fit = minimize(minimize_func, x0=x0.cpu(), args=(self.model, self.device), bounds=self.input_bounds, method='L-BFGS-B', options=dict(eps=.5))
-        #     # print("Minimize returned: ", fit)
-        #     x = fit.x
-        #     # print(x0)
-        #     # print(x)
-        #     x = [(x[i]//self.input_min_spacings[i])*self.input_min_spacings[i] for i in range(2)]
-        #     if x not in local_maxima:
-        #         local_maxima.append(x)
-        #         scores.append(fit.fun)
-        # local_maxima = np.array(local_maxima)
-        # local_maxima = local_maxima[np.argsort(scores)]
-        # print(f"Asking GP... Currently have {len(self.inputs)} inputs and {len(self.targets)} targets.")
-        # # return 1,1
         max_n_samples = 10_000
         if len(self.plotting_positions) > max_n_samples:
             test_x = self.plotting_positions[np.random.choice(len(self.plotting_positions), max_n_samples)]
@@ -479,7 +967,10 @@ class GPytorchAgent(Agent):
         stds = stds.sum(0).detach().cpu().numpy()
         partial = tasks.plot_griddata.s(xs=test_x, ys=np.copy(stds))
         grid_stds = griddata(test_x, stds, (self.meshgrid_points[0], self.meshgrid_points[1]), method='nearest')
-        tasks.image_report(experiment_id=self.experiment_id, matrix=grid_stds, name='uncertainties')
+        tasks.image_report(experiment_id=self.experiment_id, 
+                            matrix=grid_stds, name='uncertainties',
+                            extra_data = dict(n_measured=len(self.inputs)),
+                            )
         # plt.imshow(stds.reshape(self.meshgrid_points[0].shape), cmap='terrain', origin='lower')
         
         # plt.scatter(*local_maxima.T, marker='o', color='k')
@@ -524,7 +1015,10 @@ class GPytorchAgent(Agent):
         plt.savefig(f'clustering_outputs.png')
         cb.remove()
         grid_evaluations = griddata(test_x, evaluation.loc.max(0)[1].cpu(), (self.meshgrid_points[0], self.meshgrid_points[1]), method='nearest')
-        tasks.image_report(experiment_id=self.experiment_id, matrix=grid_evaluations, name='predictions')
+        tasks.image_report(experiment_id=self.experiment_id,
+                           matrix=grid_evaluations, name='predictions',
+                           extra_data = dict(n_measured=len(self.inputs))
+                        )
         # plt.imshow(evaluation.loc.max(0)[1].reshape(self.meshgrid_points[0].shape), cmap='terrain', origin='lower')
         plt.scatter(*self.inputs.cpu().numpy().T, marker='.', s=1, c='r')
         plt.imshow(grid_evaluations, cmap='terrain', origin='lower', extent=np.ravel(self.input_bounds))
