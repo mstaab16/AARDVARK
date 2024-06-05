@@ -20,6 +20,7 @@ from numpy.typing import ArrayLike
 from abc import ABC, abstractmethod
 
 import time
+import pickle
 
 # This is an adaptation of the Agent base class from bluesky-adaptive that works for my use
 
@@ -623,8 +624,11 @@ class DKLAgent_old(Agent):
     
 
 class DKLAgent(Agent):
-    def __init__(self, input_bounds, input_min_spacings, experiment_id):
+    def __init__(self, input_bounds, input_min_spacings, experiment_id, data_ids):
         print("Creating Classification GP Agent")
+        self.intensity_factor = 1
+        self.umap_factor = 1
+        self.data_ids = data_ids
         self.input_bounds = input_bounds
         self.input_min_spacings = input_min_spacings
         self.inputs=None
@@ -645,6 +649,8 @@ class DKLAgent(Agent):
         if True:
             self.inputs = torch.atleast_2d(torch.tensor(x, device=self.device, dtype=torch.float32))
             self.targets = torch.atleast_1d(torch.tensor(y, device=self.device, dtype=torch.float32))
+            self.intensities = self.targets.sum(axis=1)
+            self.intensities = self.intensities / self.intensities.max()
         start = time.perf_counter_ns()
         self.fit()
         end = time.perf_counter_ns()
@@ -662,15 +668,38 @@ class DKLAgent(Agent):
         encoded_y = umap_model.fit(train_y).transform(train_y)
         encoded_y = torch.as_tensor(encoded_y, device=self.device)#, dtype=torch.float32)
         print(f"UMAP fitted: {type(encoded_y)}")
+        tasks.save_report(experiment_id=self.experiment_id, name='umap_coords', 
+                          data={
+                                'umap_coords': encoded_y.cpu().numpy().tolist(),
+                                'xy_coords': self.inputs.cpu().numpy().tolist(),
+                                'n_measured': len(self.inputs),
+                                'data_ids': self.data_ids,
+                            })
+        # scaled_encoded_y = encoded_y.cpu().numpy()
+        # scaled_encoded_y = (255 * (scaled_encoded_y - scaled_encoded_y.min(axis=0)[np.newaxis, ...]) / (scaled_encoded_y.max(axis=0)[np.newaxis, ...] - scaled_encoded_y.min(axis=0)[np.newaxis, ...])).astype(np.uint8)
+        # app.send_task("celery_workers.tasks.image_report", args=(
+        #                     self.experiment_id,
+        #                     'UMAP as RGB',
+        #                     self.inputs.cpu().numpy(),
+        #                     encoded_y.cpu().numpy(),
+        #                     (self.meshgrid_points[0], self.meshgrid_points[1]),
+        #                     "linear",
+        #                     dict(n_measured=len(self.inputs)),
+        #                     ))
+        
     
         print("Fitting GP")
         # encoded_y = self.vae.encode(train_y)[0].detach().clone()
-        print(f"{encoded_y.shape=}")
+        # print(f"{encoded_y.shape=}")
 
         # likelihood = DirichletClassificationLikelihood(train_y, learn_additional_noise=False)
-        likelihood = gpytorch.likelihoods.MultitaskGaussianLikelihood(num_tasks=encoded_y.shape[-1])
-        model = DKLModel(train_x, encoded_y, likelihood)
-        print(model)
+        gp_targets = torch.cat([encoded_y, self.intensities.unsqueeze(-1)], dim=-1)
+        print(f"{encoded_y.shape=}, {self.intensities.shape=}, {gp_targets.shape=}")
+        likelihood = gpytorch.likelihoods.MultitaskGaussianLikelihood(num_tasks=encoded_y.shape[-1] + 1)
+        
+        # gp_targets = encoded_y
+        model = DKLModel(train_x, gp_targets, likelihood)
+        # print(model)
         model.to(self.device)
         likelihood.to(self.device)
 
@@ -689,10 +718,10 @@ class DKLAgent(Agent):
         for i in range(training_iterations):
             optimizer.zero_grad()
             output = model(train_x)
-            loss = -mll(output, encoded_y)
+            loss = -mll(output, gp_targets)
 
             loss.backward()
-            print('Iter %d/%d - Loss: %.3f' % (i + 1, training_iterations, loss.item()))
+            # print('Iter %d/%d - Loss: %.3f' % (i + 1, training_iterations, loss.item()))
             optimizer.step()
 
         model.eval()
@@ -723,12 +752,18 @@ class DKLAgent(Agent):
         # means_and_variances = evaluation.mean.detach()#.cpu().numpy()
         # means = self.vae.mean_var_decoder(means_and_variances).detach().cpu().numpy()
         means = evaluation.mean.detach().cpu().numpy()
+        intensity_mean = means[:,-1]
+        means = means[:,:-1]
         print(f'{means.shape=}')
         # print(means)
         stds = evaluation.stddev
+        intensity_std = stds[:,-1].detach().cpu().numpy()
         stds -= stds.min(axis=0, keepdim=True).values
         stds /= stds.max(axis=0, keepdim=True).values
-        stds = stds.sum(axis=1).detach().cpu().numpy()
+        stds = stds.sum(axis=1).detach().cpu().numpy() / 4
+
+        # stds = stds * self.umap_factor + self.intensity_factor * np.clip(intensity_mean,0,1)
+        stds = stds * np.clip(intensity_mean,0,1)
         # stds = stds/std_std
         # stds = 
 
@@ -750,9 +785,27 @@ class DKLAgent(Agent):
         # grid_stds = griddata(test_x, stds, (self.meshgrid_points[0], self.meshgrid_points[1]), method='linear')
         app.send_task("celery_workers.tasks.image_report", args=(
                             self.experiment_id,
-                            'Uncertainties',
+                            'Acquisition function',
                             test_x,
                             stds,
+                            xi,
+                            method,
+                            dict(n_measured=len(self.inputs)),
+                            ))
+        app.send_task("celery_workers.tasks.image_report", args=(
+                            self.experiment_id,
+                            'GP Intensities',
+                            test_x,
+                            intensity_mean,
+                            xi,
+                            method,
+                            dict(n_measured=len(self.inputs)),
+                            ))
+        app.send_task("celery_workers.tasks.image_report", args=(
+                            self.experiment_id,
+                            'GP Intensity Uncertainty',
+                            test_x,
+                            intensity_std,
                             xi,
                             method,
                             dict(n_measured=len(self.inputs)),
@@ -787,13 +840,23 @@ class DKLAgent(Agent):
                             method,
                             dict(n_measured=len(self.inputs)),
                             ))
+        
+        app.send_task("celery_workers.tasks.image_report", args=(
+                            self.experiment_id,
+                            'UMAP interpolated coords',
+                            test_x,
+                            means,
+                            xi,
+                            method,
+                            dict(n_measured=len(self.inputs)),
+                            ))
         scaled_means = (255 * (means - means.min(axis=0)[np.newaxis, ...]) / (means.max(axis=0)[np.newaxis, ...] - means.min(axis=0)[np.newaxis, ...])).astype(np.uint8)
-        print(f"Scaled means shape={scaled_means.shape}")
+        # print(f"Scaled means shape={means.shape}")
         # grid_rgb = griddata(test_x, scaled_means, (self.meshgrid_points[0], self.meshgrid_points[1]), method='linear')
         # app.tasks.image_report(experiment_id=self.experiment_id,
         app.send_task("celery_workers.tasks.image_report", args=(
                             self.experiment_id,
-                            'UMAP as RGB',
+                            'GP est. UMAP as RGB',
                             test_x,
                             scaled_means,
                             xi,

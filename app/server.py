@@ -44,6 +44,9 @@ whitelist.extend(['131.243.88.203'])
 #Backup Computer IP:
 whitelist.extend(['131.243.73.174'])
 
+#MicroARPES Computer IP:
+whitelist.extend(['131.243.73.19'])
+
 class Server:
     def __init__(self):
         create_tables()

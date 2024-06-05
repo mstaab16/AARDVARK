@@ -1,6 +1,7 @@
 import time
 import numpy as np
 import base64
+import os
 import json
 import logging
 from scipy.stats import qmc
@@ -33,6 +34,7 @@ class ExperimentWatcher:
         self.max_positions_per_motor = [int(np.ceil((motor.high - motor.low) / motor.min_step)) for motor in self.motors]
         self.all_possible_measurement_indices = np.arange(np.prod(self.max_positions_per_motor))
         self.measured_indices = np.array([])
+        # self.data_ids = []
         self.data_ids = []
         self.data_indices = []
         self.x = []
@@ -40,7 +42,7 @@ class ExperimentWatcher:
         self.data_names = []
         
         self.pipeline = [
-            agents.DKLAgent(input_bounds=[[low,high] for low, high in zip(self.motor_lows, self.motor_highs)], input_min_spacings=self.motor_min_steps, experiment_id=self.experiment_id),
+            agents.DKLAgent(data_ids=self.data_ids, input_bounds=[[low,high] for low, high in zip(self.motor_lows, self.motor_highs)], input_min_spacings=self.motor_min_steps, experiment_id=self.experiment_id),
             # # agents.PCAAgent(n_components=50),
             # agents.UMAPAgent(n_components=3),
             # agents.KMeansAgent(n_clusters=6, experiment_id=self.experiment_id),
@@ -92,22 +94,6 @@ class ExperimentWatcher:
                 method = f"Startup: Corners and {num_random_measurements} random measurements.")
             self.db.add(startup_decision)
             self.db.commit()
-
-            # corners = [[self.motor_lows[0], self.motor_lows[1]],
-            #         [self.motor_highs[0], self.motor_lows[1]],
-            #         [self.motor_lows[0], self.motor_highs[1]],
-            #         [self.motor_highs[0], self.motor_highs[1]],
-            #         ]
-            # boundary_measurements = []
-            # boundary_measurements.extend([[self.motor_lows[0], y] for y in np.linspace(self.motor_lows[1], self.motor_highs[1], num_boundary_measurements)])
-            # boundary_measurements.extend([[x, self.motor_highs[1]] for x in np.linspace(self.motor_lows[0], self.motor_highs[0], num_boundary_measurements)])
-            # boundary_measurements.extend([[self.motor_highs[0], y] for y in np.linspace(self.motor_lows[1], self.motor_highs[1], num_boundary_measurements)[::-1]])
-            # boundary_measurements.extend([[x, self.motor_lows[1]] for x in np.linspace(self.motor_lows[0], self.motor_highs[0], num_boundary_measurements)[::-1]])
-            # for pos in boundary_measurements:
-            #     pos_dict = {motor.device_name: pos[i] for i, motor in enumerate(self.motors)}
-            #     measurement = Measurement(experiment_id=self.experiment.experiment_id, decision_id=startup_decision.decision_id,
-            #                             positions=pos_dict, measured=False, measurement_time="", ai_cycle=None)
-            #     self.db.add(measurement)
 
             # Create the first measurements
             measurements = self.create_random_measurements(num_random_measurements, startup_decision.decision_id)
@@ -213,7 +199,23 @@ class ExperimentWatcher:
             self.data_ids.append(data_id)
             self.data_indices.append(position_to_index(np.array([list(pos.values())]), self.motor_lows, self.motor_min_steps, self.max_positions_per_motor))
             self.x.append(np.array(list(pos.values())))
-            self.y.append(np.fromfile(data, dtype=np.int32).reshape(*data_info['dimensions'], order='F').flatten())
+            # shape = data_info['dimensions']
+            # data_as_int32 = np.fromfile(data, dtype=np.int32)
+            # if np.prod(shape) != np.size(data_as_int32):
+            #     # data = np.reshape(data_bytes, shape, order='F').flatten()
+            #     data = np.reshape(data_as_int32.astype(np.float64), shape, order='F')
+            #     # data = .reshape(*shape, order='F').flatten()
+            # else:
+            #     data = np.reshape(data_as_int32, shape, order='F')
+            #     # data = np.fromfile(data, dtype=np.int32).reshape(*shape, order='F').flatten()
+            shape = data_info['dimensions']
+            print(f"size of file{data}: {os.path.getsize(data)}")
+            num_bytes = os.path.getsize(data)
+            if np.prod(shape) * 4 == num_bytes:
+                data = np.fromfile(data, dtype=np.int32).reshape(*shape, order='F').flatten()
+            else:
+                data = np.fromfile(data, dtype=np.float64).reshape(*shape, order='F').flatten()
+            self.y.append(data)
 
         print(f'Updated with {len(query)} new datasets in {(time.perf_counter_ns() - start) / 1e6:.02} ms.')
         return len(query)
